@@ -1,0 +1,383 @@
+import { useMemo, useState } from 'react'
+import { Link, useLocation, useNavigate } from 'react-router-dom'
+import {
+  ArrowDown,
+  ArrowRight,
+  ArrowUp,
+  ChevronDown,
+  ChevronRight,
+  CircleCheck,
+  Download,
+  House,
+  Plus,
+  RefreshCw,
+  Search,
+  X,
+} from 'lucide-react'
+import { useAuth } from '../context/AuthContext'
+import {
+  ESTADO_LABELS,
+  ESTADOS_EN_SEGUIMIENTO,
+  ESTADOS_OFICIO,
+  ESTADOS_PENDIENTES,
+  FECHA_ACTUAL,
+  PRIORIDAD_LABELS,
+  PRIORIDADES,
+} from '../data/mockData'
+import { useOficios } from '../context/oficiosContext'
+import { useInstitucion } from '../context/institucionContext'
+import PriorityBadge from '../components/PriorityBadge'
+import Pagination from '../components/Pagination'
+import { formatFechaCorta, formatHora12 } from '../utils/fechas'
+import { exportCsv } from '../utils/exportCsv'
+
+const POR_PAGINA = 6
+
+const TABS = [
+  { id: 'todas', label: 'Todas las solicitudes', match: () => true },
+  { id: 'seguimiento', label: 'En seguimiento', match: (o) => ESTADOS_EN_SEGUIMIENTO.includes(o.estado) },
+  { id: 'pendientes', label: 'Pendientes', match: (o) => ESTADOS_PENDIENTES.includes(o.estado) },
+  { id: 'resueltas', label: 'Resueltas', match: (o) => o.estado === ESTADOS_OFICIO.RESUELTA },
+]
+
+const esResuelta = (o) => o.estado === ESTADOS_OFICIO.RESUELTA
+
+// Búsqueda sin distinguir mayúsculas ni acentos
+const normalizar = (s) =>
+  String(s ?? '')
+    .normalize('NFD')
+    .replace(/[̀-ͯ]/g, '')
+    .toLowerCase()
+
+export default function BuzonOficios() {
+  const { filterOficios, can } = useAuth()
+  const location = useLocation()
+  const navigate = useNavigate()
+
+  // Aviso de éxito al regresar de "Crear Oficio"
+  const creado = location.state?.creado
+  const cerrarAviso = () => navigate(location.pathname, { replace: true, state: null })
+
+  const [busqueda, setBusqueda] = useState('')
+  const [area, setArea] = useState('')
+  const [urgencia, setUrgencia] = useState('')
+  const [tab, setTab] = useState('todas')
+  const [orden, setOrden] = useState('desc')
+  const [pagina, setPagina] = useState(1)
+
+  // Cualquier cambio de filtro regresa a la primera página
+  const conReinicio = (setter) => (valor) => {
+    setter(valor)
+    setPagina(1)
+  }
+
+  const { oficios } = useOficios()
+  const { dependencias, getDependencia } = useInstitucion()
+  const visibles = useMemo(() => filterOficios(oficios), [filterOficios, oficios])
+
+  // Solo se ofrecen las dependencias que el rol activo puede ver
+  const areasDisponibles = useMemo(() => {
+    const ids = new Set(visibles.map((o) => o.dependenciaId))
+    return dependencias.filter((d) => ids.has(d.id))
+  }, [visibles, dependencias])
+  const areaValida = areasDisponibles.some((d) => d.id === area) ? area : ''
+
+  // Búsqueda + Área + Urgencia (antes de las pestañas, para que los contadores respondan)
+  const filtrados = useMemo(() => {
+    const q = normalizar(busqueda.trim())
+    return visibles.filter((o) => {
+      if (areaValida && o.dependenciaId !== areaValida) return false
+      if (urgencia && o.prioridad !== urgencia) return false
+      if (!q) return true
+      const dep = getDependencia(o.dependenciaId)
+      return [o.folio, o.asunto, o.categoria, o.subarea, dep?.nombre, dep?.nombreCorto].some((v) =>
+        normalizar(v).includes(q)
+      )
+    })
+  }, [visibles, busqueda, areaValida, urgencia, getDependencia])
+
+  const conteos = Object.fromEntries(TABS.map((t) => [t.id, filtrados.filter(t.match).length]))
+
+  const lista = useMemo(() => {
+    const t = TABS.find((x) => x.id === tab)
+    // Primero los activos y al final los resueltos; dentro de cada grupo, por fecha de recepción
+    return filtrados
+      .filter(t.match)
+      .sort(
+        (a, b) =>
+          esResuelta(a) - esResuelta(b) ||
+          (orden === 'desc'
+            ? b.fechaCreacion.localeCompare(a.fechaCreacion)
+            : a.fechaCreacion.localeCompare(b.fechaCreacion))
+      )
+  }, [filtrados, tab, orden])
+
+  const totalPaginas = Math.max(1, Math.ceil(lista.length / POR_PAGINA))
+  const paginaActual = Math.min(pagina, totalPaginas)
+  const desde = (paginaActual - 1) * POR_PAGINA
+  const paginaItems = lista.slice(desde, desde + POR_PAGINA)
+
+  const hayFiltros = busqueda || areaValida || urgencia || tab !== 'todas'
+  const restablecer = () => {
+    setBusqueda('')
+    setArea('')
+    setUrgencia('')
+    setTab('todas')
+    setOrden('desc')
+    setPagina(1)
+  }
+
+  const exportar = () =>
+    exportCsv(
+      `buzon-oficios-${FECHA_ACTUAL.toISOString().slice(0, 10)}.csv`,
+      [
+        { header: 'Folio', value: (o) => o.folio },
+        { header: 'Categoría', value: (o) => o.categoria },
+        { header: 'Asunto', value: (o) => o.asunto },
+        { header: 'Dependencia', value: (o) => getDependencia(o.dependenciaId)?.nombre },
+        { header: 'Sub-área', value: (o) => o.subarea },
+        { header: 'Recibida', value: (o) => `${formatFechaCorta(o.fechaCreacion)} ${formatHora12(o.fechaCreacion)}` },
+        { header: 'Prioridad', value: (o) => PRIORIDAD_LABELS[o.prioridad] },
+        { header: 'Estado', value: (o) => ESTADO_LABELS[o.estado] },
+        { header: 'Fecha límite', value: (o) => `${formatFechaCorta(o.fechaLimite)} ${formatHora12(o.fechaLimite)}` },
+      ],
+      lista
+    )
+
+  return (
+    <>
+      {/* Barra de filtros a todo lo ancho, pegada al Header */}
+      <div className="-mx-4 -mt-6 mb-5 border-b border-line bg-surface px-4 py-6 sm:-mx-7 sm:px-7">
+        <div className="flex flex-wrap items-center gap-3 lg:gap-4">
+          <label className="relative min-w-[240px] flex-1 lg:max-w-[530px]">
+            <span className="sr-only">Buscar</span>
+            <Search size={18} className="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-slate-500" />
+            <input
+              type="search"
+              value={busqueda}
+              onChange={(e) => conReinicio(setBusqueda)(e.target.value)}
+              placeholder="Buscar por folio, asunto o dependencia"
+              className="h-11 w-full rounded-lg border border-line bg-canvas pl-11 pr-4 text-sm text-slate-800 placeholder:text-slate-500 focus:border-primary focus:bg-white focus:outline-none focus:ring-2 focus:ring-primary/20"
+            />
+          </label>
+
+          <span className="hidden text-sm text-slate-500 xl:inline">Filtrar por</span>
+
+          <FilterSelect
+            label="Área"
+            value={areaValida}
+            onChange={conReinicio(setArea)}
+            options={[
+              { value: '', label: 'Todas las áreas' },
+              ...areasDisponibles.map((d) => ({ value: d.id, label: d.nombreCorto })),
+            ]}
+          />
+          <FilterSelect
+            label="Urgencia"
+            value={urgencia}
+            onChange={conReinicio(setUrgencia)}
+            options={[
+              { value: '', label: 'Todos los niveles' },
+              ...Object.values(PRIORIDADES).map((p) => ({ value: p, label: PRIORIDAD_LABELS[p] })),
+            ]}
+          />
+
+          <button
+            onClick={restablecer}
+            disabled={!hayFiltros}
+            className="ml-auto rounded-md px-1 text-sm font-medium text-primary hover:text-primary-hover disabled:cursor-default disabled:opacity-50"
+          >
+            Restablecer
+          </button>
+        </div>
+      </div>
+
+      {creado && (
+        <div
+          role="status"
+          className="mb-5 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800"
+        >
+          <span className="flex items-center gap-2">
+            <CircleCheck size={17} className="shrink-0" />
+            El oficio <span className="font-semibold">#{creado.folio}</span> se emitió y envió correctamente.
+          </span>
+          <div className="flex items-center gap-4">
+            <Link to={`/oficios/${creado.id}`} className="font-semibold hover:underline">
+              Ver seguimiento
+            </Link>
+            <button onClick={cerrarAviso} className="rounded p-0.5 hover:bg-emerald-100" aria-label="Cerrar aviso">
+              <X size={15} />
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Breadcrumb + título */}
+      <nav className="flex items-center gap-2 text-sm text-slate-500" aria-label="Ruta">
+        <House size={15} strokeWidth={1.75} />
+        <span>Gestión institucional</span>
+        <ChevronRight size={14} />
+        <span className="font-medium text-primary">Buzón</span>
+      </nav>
+
+      <div className="mb-6 mt-3 flex flex-wrap items-end justify-between gap-4">
+        <h1 className="text-[32px] font-bold leading-tight tracking-tight text-slate-900">Buzón de Oficios</h1>
+        <div className="flex flex-wrap items-center gap-5">
+          <p className="flex items-center gap-2 text-xs text-slate-500">
+            <RefreshCw size={14} />
+            Actualizado hoy, {formatHora12(FECHA_ACTUAL)}
+          </p>
+          {can('crear_oficio') && (
+            <Link to="/oficios/nuevo" className="btn-primary">
+              <Plus size={16} /> Nuevo oficio
+            </Link>
+          )}
+        </div>
+      </div>
+
+      <div className="card overflow-hidden">
+        {/* Pestañas + exportar */}
+        <div className="flex flex-wrap items-center justify-between gap-x-6 border-b border-line px-6">
+          <div role="tablist" className="-mb-px flex gap-7 overflow-x-auto">
+            {TABS.map((t) => {
+              const activa = tab === t.id
+              return (
+                <button
+                  key={t.id}
+                  role="tab"
+                  aria-selected={activa}
+                  onClick={() => conReinicio(setTab)(t.id)}
+                  className={`flex items-center gap-2 whitespace-nowrap border-b-2 py-5 text-sm transition-colors ${
+                    activa
+                      ? 'border-primary font-semibold text-primary'
+                      : 'border-transparent text-slate-500 hover:text-slate-800'
+                  }`}
+                >
+                  {t.label}
+                  {activa ? (
+                    <span className="rounded-full bg-primary-soft px-2 py-0.5 text-[11px] font-semibold">
+                      {conteos[t.id]}
+                    </span>
+                  ) : (
+                    <span>· {conteos[t.id]}</span>
+                  )}
+                </button>
+              )
+            })}
+          </div>
+          <button
+            onClick={exportar}
+            disabled={lista.length === 0}
+            className="flex items-center gap-2 py-4 text-sm text-slate-600 hover:text-primary disabled:opacity-40"
+          >
+            <Download size={16} strokeWidth={1.75} />
+            Exportar listado
+          </button>
+        </div>
+
+        {/* Tabla */}
+        <div className="overflow-x-auto">
+          <table className="w-full min-w-[960px] text-left">
+            <thead className="border-b border-line bg-slate-50 text-[11px] font-semibold uppercase tracking-wide text-slate-600">
+              <tr>
+                <th className="px-6 py-4 font-semibold">Folio</th>
+                <th className="px-6 py-4 font-semibold">Categoría / Asunto</th>
+                <th className="px-6 py-4 font-semibold">Dependencia de origen</th>
+                <th className="px-6 py-4 font-semibold">
+                  <button
+                    onClick={() => setOrden((o) => (o === 'desc' ? 'asc' : 'desc'))}
+                    className="inline-flex items-center gap-1 uppercase hover:text-slate-900"
+                    aria-label={`Ordenar por fecha ${orden === 'desc' ? 'ascendente' : 'descendente'}`}
+                  >
+                    Recibida {orden === 'desc' ? <ArrowDown size={13} /> : <ArrowUp size={13} />}
+                  </button>
+                </th>
+                <th className="px-6 py-4 font-semibold">Prioridad</th>
+                <th className="px-6 py-4 font-semibold">Acciones</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-line">
+              {paginaItems.map((o) => {
+                const dep = getDependencia(o.dependenciaId)
+                return (
+                  <tr key={o.id} className="transition-colors hover:bg-slate-50/60">
+                    <td className="px-6 py-5">
+                      <span className="inline-block whitespace-nowrap rounded-md border border-line bg-slate-50 px-2 py-1 text-xs font-medium text-slate-600">
+                        #{o.folio}
+                      </span>
+                      {esResuelta(o) && (
+                        <span className="mt-2 flex w-fit items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 text-[11px] font-semibold text-emerald-700 ring-1 ring-inset ring-emerald-200/70">
+                          <CircleCheck size={12} strokeWidth={2} /> Resuelta
+                        </span>
+                      )}
+                    </td>
+                    <td className="px-6 py-5">
+                      <p className="text-[11px] text-slate-500">{o.categoria}</p>
+                      <p className="mt-1 text-sm font-semibold text-slate-900">{o.asunto}</p>
+                    </td>
+                    <td className="px-6 py-5">
+                      <p className="text-sm text-slate-800">{dep?.nombre}</p>
+                      <p className="mt-1 text-xs text-slate-500">{o.subarea}</p>
+                    </td>
+                    <td className="whitespace-nowrap px-6 py-5">
+                      <p className="text-sm text-slate-800">{formatHora12(o.fechaCreacion)}</p>
+                      <p className="mt-1 text-xs text-slate-500">{formatFechaCorta(o.fechaCreacion)}</p>
+                    </td>
+                    <td className="px-6 py-5">
+                      <PriorityBadge prioridad={o.prioridad} />
+                    </td>
+                    <td className="px-6 py-5">
+                      <Link
+                        to={`/oficios/${o.id}`}
+                        className="inline-flex items-center gap-2 whitespace-nowrap rounded-lg border border-line bg-white px-3 py-2 text-sm font-semibold text-primary transition-colors hover:border-primary/30 hover:bg-primary-soft"
+                      >
+                        Ver Seguimiento <ArrowRight size={15} />
+                      </Link>
+                    </td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+
+          {lista.length === 0 && (
+            <div className="px-6 py-14 text-center">
+              <p className="text-sm font-medium text-slate-700">No se encontraron solicitudes</p>
+              <p className="mt-1 text-xs text-slate-500">Prueba con otros términos o restablece los filtros.</p>
+            </div>
+          )}
+        </div>
+
+        {/* Pie: conteo + paginación */}
+        <div className="flex flex-wrap items-center justify-between gap-4 border-t border-line px-6 py-4">
+          <p className="text-sm text-slate-500">
+            {lista.length === 0
+              ? 'Sin resultados'
+              : `Mostrando ${desde + 1}–${desde + paginaItems.length} de ${lista.length} solicitudes`}
+          </p>
+          <Pagination page={paginaActual} totalPages={totalPaginas} onChange={setPagina} />
+        </div>
+      </div>
+    </>
+  )
+}
+
+function FilterSelect({ label, value, onChange, options }) {
+  return (
+    <label className="relative flex h-11 min-w-[200px] items-center rounded-lg border border-line bg-white pl-4 pr-10 text-sm focus-within:border-primary focus-within:ring-2 focus-within:ring-primary/20 lg:min-w-[245px]">
+      <span className="mr-1.5 text-slate-500">{label}:</span>
+      <select
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        className="w-full cursor-pointer appearance-none bg-transparent font-medium text-slate-900 focus:outline-none"
+      >
+        {options.map((o) => (
+          <option key={o.value} value={o.value}>
+            {o.label}
+          </option>
+        ))}
+      </select>
+      <ChevronDown size={16} className="pointer-events-none absolute right-3 text-slate-500" />
+    </label>
+  )
+}
