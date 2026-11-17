@@ -26,7 +26,12 @@ import {
 
 const decimal = (n) => n.toFixed(1).replace('.', ',')
 const plural = (n, uno, varios) => `${n.toLocaleString('es-MX')} ${n === 1 ? uno : varios}`
-const primerNombre = (nombre) => nombre.replace(/^(Dr|Dra|Lic|Ing|Mtro|Mtra)\.\s*/i, '').split(' ')[0]
+
+// CORRECCIÓN: Función segura para evitar que crashee si el nombre es indefinido
+const primerNombre = (nombre) => {
+  if (!nombre) return 'Usuario';
+  return String(nombre).replace(/^(Dr|Dra|Lic|Ing|Mtro|Mtra)\.\s*/i, '').split(' ')[0];
+}
 
 // Cálculo de indicadores a partir de las solicitudes visibles para el rol
 function calcularMetricas(lista) {
@@ -108,7 +113,8 @@ export default function Dashboard() {
           <p className="text-[11px] font-semibold tracking-wide text-white/85">
             {formatFechaInstitucional(FECHA_ACTUAL)}
           </p>
-          <p className="mt-3 text-lg font-semibold">Hola, {primerNombre(user.nombre)}</p>
+          {/* CORRECCIÓN: Leemos la propiedad nombre_completo que manda tu Spring Boot */}
+          <p className="mt-3 text-lg font-semibold">Hola, {primerNombre(user?.nombre_completo || user?.nombre)}</p>
           <p className="mt-0.5 text-sm text-white/75">
             {plural(m.abiertas, 'solicitud abierta', 'solicitudes abiertas')}
             {m.vencenHoy > 0 && ` · ${plural(m.vencenHoy, 'vence', 'vencen')} hoy`} {alcance}.
@@ -183,7 +189,7 @@ export default function Dashboard() {
             <tbody className="divide-y divide-line">
               {m.recientes.map((o) => (
                 <tr
-                  key={o.id}
+                  key={o.idTicket}
                   onClick={() => navigate(`/oficios/${o.id}`)}
                   className="cursor-pointer transition-colors hover:bg-slate-50"
                 >

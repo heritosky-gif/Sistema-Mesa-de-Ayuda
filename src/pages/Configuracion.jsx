@@ -41,7 +41,7 @@ function PerfilForm() {
 
   const set = (campo) => (valor) => setForm((f) => ({ ...f, [campo]: valor }))
   const cambiaPassword = !!(form.actual || form.nueva || form.confirmacion)
-  const hayCambios = form.nombre.trim() !== user.nombre || form.foto !== (user.foto ?? null) || cambiaPassword
+  const hayCambios = (user?.nombre_completo || user?.nombre || '').trim() !== user.nombre || form.foto !== (user.foto ?? null) || cambiaPassword
 
   const errores = {}
   if (intentado) {

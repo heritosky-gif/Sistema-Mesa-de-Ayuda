@@ -42,7 +42,7 @@ export default function App() {
             <Route path="/usuarios/:id/editar" element={<EditarUsuario />} />
           </Route>
 
-          {/* "Mi Perfil" vive en /configuracion (ajustes personales del usuario en sesión) */}
+          
           <Route path="/perfil" element={<Navigate to="/configuracion" replace />} />
           <Route path="/notificaciones" element={<Notificaciones />} />
           <Route path="/configuracion" element={<Configuracion />} />
