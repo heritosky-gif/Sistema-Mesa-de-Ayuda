@@ -9,7 +9,6 @@ export function OficiosProvider({ children }) {
   const [loading, setLoading] = useState(true)
   const { isAuthenticated } = useAuth()
 
-  // 1. Llamada real a tu Spring Boot
   const fetchOficios = useCallback(async () => {
     if (!isAuthenticated) {
       setOficios([])
@@ -19,7 +18,6 @@ export function OficiosProvider({ children }) {
     
     try {
       setLoading(true)
-      // Ajusta la ruta a '/tickets' o '/oficios' según lo hayas llamado en Spring Boot
       const response = await axiosClient.get('/api/tickets/todos') 
       setOficios(response.data)
     } catch (error) {
@@ -34,15 +32,50 @@ export function OficiosProvider({ children }) {
     fetchOficios()
   }, [fetchOficios])
 
-  // 2. Funciones de compatibilidad (para que las demás vistas no choquen)
-  const getOficio = useCallback((id) => oficios.find((o) => o.id === id), [oficios])
+  const crearOficio = useCallback(async (payloadTicket, adjuntos = []) => {
+    try {
+      
+      const response = await axiosClient.post('/api/tickets/crear', payloadTicket);
+      const nuevoTicket = response.data; 
+
+      if (adjuntos.length > 0) {
+        // Ejecutamos todas las subidas en paralelo
+        await Promise.all(adjuntos.map(async (adjunto) => {
+          const formData = new FormData();
+          formData.append('archivo', adjunto.archivoFisico); 
+          
+          await axiosClient.post(`/api/tickets/${nuevoTicket.idTicket}/evidencias`, formData, {
+            headers: {
+              'Content-Type': 'multipart/form-data'
+            }
+          });
+        }));
+      }
+
+      setOficios((prev) => [...prev, nuevoTicket]);
+
+      return nuevoTicket;
+    } catch (error) {
+      console.error("Fallo al insertar en PostgreSQL:", error);
+      throw error; 
+    }
+  }, []);
+
+  const getBorrador = useCallback((userId) => {
+    const b = localStorage.getItem(`borrador_${userId}`);
+    return b ? JSON.parse(b) : null;
+  }, [])
+  const guardarBorrador = useCallback((userId, datos) => {
+    localStorage.setItem(`borrador_${userId}`, JSON.stringify({ form: datos.form, adjuntos: [] }));
+  }, [])
+  const descartarBorrador = useCallback((userId) => {
+    localStorage.removeItem(`borrador_${userId}`);
+  }, [])
+
+  const getOficio = useCallback((id) => oficios.find((o) => (o.idTicket || o.id) === id), [oficios])
   const getMensajes = useCallback((id) => [], [])
   const agregarMensaje = useCallback((id, mensaje) => console.log("Pendiente conectar mensajes"), [])
   const finalizarOficio = useCallback((id, msg) => console.log("Pendiente conectar cierre"), [])
-  const crearOficio = useCallback((datos) => console.log("Pendiente conectar creación", datos), [])
-  const getBorrador = useCallback(() => null, [])
-  const guardarBorrador = useCallback(() => {}, [])
-  const descartarBorrador = useCallback(() => {}, [])
   const getLeidas = useCallback(() => [], [])
   const marcarLeidas = useCallback(() => {}, [])
   
@@ -54,8 +87,8 @@ export function OficiosProvider({ children }) {
       getMensajes,
       agregarMensaje,
       finalizarOficio,
-      crearOficio,
-      siguienteFolio: "0000",
+      crearOficio, 
+      siguienteFolio: "Automático", 
       getBorrador,
       guardarBorrador,
       descartarBorrador,
