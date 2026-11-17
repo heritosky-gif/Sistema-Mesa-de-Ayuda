@@ -9,9 +9,9 @@ export default function Login() {
   const location = useLocation()
   const [correo, setCorreo] = useState('')
   const [password, setPassword] = useState('')
-  const [error, setError] = useState(null) // <-- Corregido: sin <string | null>
+  const [error, setError] = useState(null) 
 
-  const handleSubmit = async (e) => { // <-- Corregido: sin : React.FormEvent
+  const handleSubmit = async (e) => {
     e.preventDefault()
     setError(null)
     
