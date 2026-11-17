@@ -2,13 +2,9 @@ import { useState } from 'react'
 import { Check, ChevronDown, CircleExclamationPoint, Eye, EyeOff, Plus, UserPlus } from 'lucide-react'
 import { useAuth } from '../context/AuthContext'
 import { useInstitucion } from '../context/institucionContext'
-import { ROLES } from '../data/mockData'
-import { puedeAdministrarCatalogo, rolesAsignables } from '../utils/permisosUsuarios'
 import { NIVELES_ACCESO, grupoDe } from '../utils/nivelAcceso'
 import { validarPassword } from '../utils/password'
 import Avatar from './Avatar'
-
-const NUEVA = '__nueva__'
 
 function validar(f, { validarCorreo, exceptoId, crear }) {
   const e = {}
@@ -20,76 +16,42 @@ function validar(f, { validarCorreo, exceptoId, crear }) {
     if (!validarPassword(f.password)) e.password = 'Mínimo 8 caracteres, con al menos una letra y un número.'
     else if (f.password !== f.confirmacion) e.confirmacion = 'Las contraseñas no coinciden.'
   }
-  if (!f.dependenciaId) e.dependenciaId = 'Seleccione la dependencia.'
   if (!f.area) e.area = 'Seleccione el área o departamento.'
   return e
 }
 
-/**
- * Formulario de alta / edición de usuarios, según los diseños de Figma.
- * modo: 'crear' | 'editar'. onGuardar(datos) devuelve { ok, error? }.
- * En edición, `accionesCuenta` se muestra antes del pie (botón de baja / reactivación).
- */
 export default function UsuarioForm({ modo, inicial, onGuardar, onCancelar, accionesCuenta }) {
   const crear = modo === 'crear'
   const { user: actor } = useAuth()
-  const { dependencias, areasDe, crearArea, crearDependencia, validarCorreo } = useInstitucion()
+  const { areas, validarCorreo } = useInstitucion()
 
-  const esSuper = actor.rol === ROLES.SUPER_ADMIN
-  const esMismaCuenta = inicial?.id === actor.id
-  const rolesPermitidos = rolesAsignables(actor)
-  const catalogo = puedeAdministrarCatalogo(actor)
-  // La tarjeta de Administrador Estatal solo la ve quien puede asignarla (o si la cuenta ya lo es)
-  const tarjetas = NIVELES_ACCESO.filter((g) => g.rol !== ROLES.SUPER_ADMIN || esSuper || inicial?.rol === ROLES.SUPER_ADMIN)
+  // Evitamos que te quites los permisos a ti mismo por accidente
+  const esMismaCuenta = (inicial?.idUsuario || inicial?.id) === (actor?.idUsuario || actor?.id)
+  
+  // ¡LIBERAMOS LOS CANDADOS! Mostramos todos los niveles de acceso
+  const tarjetas = NIVELES_ACCESO 
 
   const [form, setForm] = useState(() => ({
-    nombre: inicial?.nombre ?? '',
+    nombre: inicial?.nombreCompleto || inicial?.nombre || '',
     correo: inicial?.correo ?? '',
     puesto: inicial?.puesto ?? '',
     password: '',
     confirmacion: '',
     requiereCambioPassword: false,
-    dependenciaId: inicial?.dependenciaId ?? (esSuper ? '' : actor.dependenciaId),
-    area: inicial?.area ?? '',
+    area: inicial?.area?.idArea || inicial?.area?.id || inicial?.area || '',
     grupo: grupoDe(inicial),
     nivel: inicial?.nivel ?? NIVELES_ACCESO[0].niveles[0],
   }))
   const [intentado, setIntentado] = useState(false)
   const [errorGeneral, setErrorGeneral] = useState(null)
-  const [nuevaArea, setNuevaArea] = useState(null)
-  const [nuevaDep, setNuevaDep] = useState(null)
-  const [errorCatalogo, setErrorCatalogo] = useState(null)
 
-  const opciones = { validarCorreo, exceptoId: inicial?.id, crear }
+  const opciones = { validarCorreo, exceptoId: inicial?.idUsuario || inicial?.id, crear }
   const errores = intentado ? validar(form, opciones) : {}
   const set = (campo) => (valor) => setForm((f) => ({ ...f, [campo]: valor }))
-  const areas = form.dependenciaId ? areasDe(form.dependenciaId) : []
   const grupoActual = NIVELES_ACCESO.find((g) => g.id === form.grupo)
 
   const elegirGrupo = (g) =>
     setForm((f) => ({ ...f, grupo: g.id, nivel: g.niveles.includes(f.nivel) ? f.nivel : g.niveles[0] }))
-
-  const cambiarDependencia = (valor) => {
-    if (valor === NUEVA) return setNuevaDep({ nombre: '', siglas: '' })
-    setForm((f) => ({ ...f, dependenciaId: valor, area: '' }))
-  }
-  const cambiarArea = (valor) => (valor === NUEVA ? setNuevaArea('') : set('area')(valor))
-
-  const agregarDependencia = () => {
-    const r = crearDependencia({ nombre: nuevaDep.nombre, nombreCorto: nuevaDep.nombre, siglas: nuevaDep.siglas }, actor.id)
-    if (!r.ok) return setErrorCatalogo(r.error)
-    setErrorCatalogo(null)
-    setNuevaDep(null)
-    setForm((f) => ({ ...f, dependenciaId: r.id, area: '' }))
-    setNuevaArea('') // una dependencia nueva necesita al menos un área
-  }
-  const agregarArea = () => {
-    const r = crearArea(form.dependenciaId, nuevaArea, actor.id)
-    if (!r.ok) return setErrorCatalogo(r.error)
-    setErrorCatalogo(null)
-    setNuevaArea(null)
-    set('area')(r.nombre)
-  }
 
   const enviar = (e) => {
     e.preventDefault()
@@ -98,22 +60,17 @@ export default function UsuarioForm({ modo, inicial, onGuardar, onCancelar, acci
     const primero = Object.keys(errs)[0]
     if (primero) return document.getElementById(`usr-${primero}`)?.focus()
 
-    // La contraseña no se guarda en el navegador: en producción se enviará a la API para cifrarse
     const datos = {
       nombre: form.nombre.trim(),
       correo: form.correo,
       puesto: form.puesto.trim(),
-      dependenciaId: form.dependenciaId,
       area: form.area,
       rol: grupoActual.rol,
       nivel: form.nivel,
     }
     if (form.password) {
-      datos.nuevaPassword = true // el Provider registra la fecha del cambio
-      datos.requiereCambioPassword = form.requiereCambioPassword
-    } else if (!crear && form.requiereCambioPassword) {
-      datos.requiereCambioPassword = true
-    }
+      datos.password = form.password 
+    } 
     const r = onGuardar(datos)
     if (r && !r.ok) setErrorGeneral(r.error)
   }
@@ -158,7 +115,7 @@ export default function UsuarioForm({ modo, inicial, onGuardar, onCancelar, acci
   return (
     <form noValidate onSubmit={enviar} className="card">
       <div className="divide-y divide-line px-6 sm:px-8">
-        {/* ── Datos generales ── */}
+        
         <section className="py-8">
           <h2 className="text-base font-semibold text-slate-900">
             {crear ? 'Datos Personales e Identificación' : 'Información General y Estado de la Cuenta'}
@@ -167,10 +124,10 @@ export default function UsuarioForm({ modo, inicial, onGuardar, onCancelar, acci
           {!crear && inicial && (
             <div className="mt-5 flex flex-wrap items-center justify-between gap-3 rounded-lg bg-slate-50 px-5 py-4">
               <div className="flex items-center gap-4">
-                <Avatar name={inicial.nombre} src={inicial.foto} size="ml" tone={inicial.activo ? 'primary' : 'neutral'} />
+                <Avatar name={inicial.nombreCompleto || inicial.nombre} src={inicial.foto} size="ml" tone={inicial.activo ? 'primary' : 'neutral'} />
                 <div>
-                  <p className="text-[15px] font-semibold text-slate-900">{inicial.nombre}</p>
-                  <p className="mt-1 text-xs text-slate-500">{inicial.nivel}</p>
+                  <p className="text-[15px] font-semibold text-slate-900">{inicial.nombreCompleto || inicial.nombre}</p>
+                  <p className="mt-1 text-xs text-slate-500">{inicial.rol}</p>
                 </div>
               </div>
               <EstadoCuenta activo={inicial.activo} />
@@ -216,112 +173,32 @@ export default function UsuarioForm({ modo, inicial, onGuardar, onCancelar, acci
           </div>
         </section>
 
-        {/* ── Adscripción ── */}
         <section className="py-8">
           <h2 className="text-base font-semibold text-slate-900">
-            {crear ? 'Adscripción Institucional (Dependencia y Área)' : 'Reasignación de Dependencia y Área Operativa'}
+            {crear ? 'Adscripción Institucional' : 'Reasignación de Área Operativa'}
           </h2>
-          {errorCatalogo && (
-            <p role="alert" className="mt-4 rounded-lg bg-rose-50 px-3 py-2 text-sm text-rose-700">
-              {errorCatalogo}
-            </p>
-          )}
-          <div className={`mt-6 grid gap-x-6 gap-y-5 ${crear ? 'md:grid-cols-2' : 'md:grid-cols-[1fr_1.45fr]'}`}>
-            <Campo id="usr-dependenciaId" etiqueta="Dependencia / Sector" error={errores.dependenciaId}>
-              {nuevaDep ? (
-                <div className="space-y-2 rounded-lg border border-line bg-slate-50 p-3">
-                  <input
-                    autoFocus
-                    value={nuevaDep.nombre}
-                    onChange={(e) => setNuevaDep({ ...nuevaDep, nombre: e.target.value })}
-                    placeholder="Nombre oficial de la dependencia"
-                    className="input"
-                    aria-label="Nombre de la nueva dependencia"
-                  />
-                  <div className="flex gap-2">
-                    <input
-                      value={nuevaDep.siglas}
-                      onChange={(e) => setNuevaDep({ ...nuevaDep, siglas: e.target.value })}
-                      placeholder="Siglas"
-                      className="input uppercase"
-                      aria-label="Siglas"
-                    />
-                    <button type="button" onClick={() => setNuevaDep(null)} className="btn-secondary shrink-0 px-3">
-                      Cancelar
-                    </button>
-                    <button type="button" onClick={agregarDependencia} disabled={!nuevaDep.nombre.trim()} className="btn-primary shrink-0 px-3">
-                      Agregar
-                    </button>
-                  </div>
-                </div>
-              ) : (
-                <Select
-                  id="usr-dependenciaId"
-                  value={form.dependenciaId}
-                  onChange={cambiarDependencia}
-                  invalido={!!errores.dependenciaId}
-                  deshabilitado={!esSuper}
-                >
-                  <option value="">Seleccione la dependencia</option>
-                  {dependencias
-                    // Las dependencias dadas de baja no se ofrecen (salvo la que ya tiene la cuenta)
-                    .filter((d) => (esSuper || d.id === actor.dependenciaId) && (d.activa || d.id === inicial?.dependenciaId))
-                    .map((d) => (
-                      <option key={d.id} value={d.id}>
-                        {d.nombre}
-                      </option>
-                    ))}
-                  {catalogo && <option value={NUEVA}>＋ Registrar nueva dependencia…</option>}
-                </Select>
-              )}
-            </Campo>
-
+          <div className="mt-6 grid gap-x-6 gap-y-5 md:grid-cols-2">
             <Campo id="usr-area" etiqueta="Área / Departamento Específico" error={errores.area}>
-              {nuevaArea != null ? (
-                <div className="flex gap-2">
-                  <input
-                    autoFocus
-                    value={nuevaArea}
-                    onChange={(e) => setNuevaArea(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter') {
-                        e.preventDefault()
-                        agregarArea()
-                      }
-                    }}
-                    placeholder="Nombre de la nueva área"
-                    className="input h-[46px]"
-                    aria-label="Nombre de la nueva área"
-                  />
-                  <button type="button" onClick={() => setNuevaArea(null)} className="btn-secondary shrink-0 px-3">
-                    Cancelar
-                  </button>
-                  <button type="button" onClick={agregarArea} disabled={!nuevaArea.trim()} className="btn-primary shrink-0 px-3" aria-label="Agregar área">
-                    <Plus size={15} />
-                  </button>
-                </div>
-              ) : (
-                <Select id="usr-area" value={form.area} onChange={cambiarArea} invalido={!!errores.area} deshabilitado={!form.dependenciaId}>
-                  <option value="">{form.dependenciaId ? 'Seleccione el área' : 'Primero elija la dependencia'}</option>
-                  {areas.map((a) => (
-                    <option key={a.id} value={a.nombre}>
-                      {a.nombre}
-                    </option>
-                  ))}
-                  {catalogo && form.dependenciaId && <option value={NUEVA}>＋ Agregar nueva área…</option>}
-                </Select>
-              )}
+              <Select id="usr-area" value={form.area} onChange={set('area')} invalido={!!errores.area}>
+                <option value="">Seleccione el área</option>
+                {areas.map((a) => (
+                  <option key={a.idArea || a.id} value={a.idArea || a.id}>
+                    {a.nombre}
+                  </option>
+                ))}
+              </Select>
             </Campo>
           </div>
         </section>
 
-        {/* ── Rol y nivel ── */}
         <section className="py-8">
           <h2 className="text-base font-semibold text-slate-900">Rol y Nivel de Acceso</h2>
           <div role="radiogroup" aria-label="Rol y nivel de acceso" className="mt-6 space-y-3">
             {tarjetas.map((g) => {
               const activa = form.grupo === g.id
-              const permitida = rolesPermitidos.includes(g.rol) && (!esMismaCuenta || activa)
+              // ¡Permitimos todas las tarjetas a menos que intentes cambiar tu propio rol en edición!
+              const permitida = !esMismaCuenta || activa 
+              
               return (
                 <div
                   key={g.id}
@@ -351,7 +228,6 @@ export default function UsuarioForm({ modo, inicial, onGuardar, onCancelar, acci
                       <span className="mt-1 block text-xs text-slate-500">{g.descripcion}</span>
                     </span>
                   </label>
-                  {/* Nivel específico dentro de la tarjeta elegida */}
                   {activa && (
                     <div className="flex flex-wrap items-center gap-2 px-4 pb-4 pl-[54px]">
                       <span className="text-[11px] text-slate-500">Nivel:</span>
@@ -379,7 +255,6 @@ export default function UsuarioForm({ modo, inicial, onGuardar, onCancelar, acci
           {esMismaCuenta && <p className="mt-3 text-xs text-slate-500">No puede cambiar el nivel de acceso de su propia cuenta.</p>}
         </section>
 
-        {/* ── Contraseña y acciones (solo edición) ── */}
         {!crear && (
           <section className="space-y-5 py-8">
             {camposPassword}
@@ -389,7 +264,6 @@ export default function UsuarioForm({ modo, inicial, onGuardar, onCancelar, acci
         )}
       </div>
 
-      {/* ── Pie ── */}
       <div className="flex flex-col-reverse gap-4 border-t border-line px-6 py-6 sm:flex-row sm:items-center sm:justify-between sm:px-8">
         <div>
           {errorGeneral ? (
@@ -468,7 +342,6 @@ function InputPassword({ id, value, onChange, error, placeholder }) {
         type="button"
         onClick={() => setVisible((v) => !v)}
         className="absolute right-3 top-1/2 -translate-y-1/2 rounded p-1 text-slate-500 hover:text-slate-800"
-        aria-label={visible ? 'Ocultar contraseña' : 'Mostrar contraseña'}
       >
         {visible ? <EyeOff size={17} /> : <Eye size={17} />}
       </button>

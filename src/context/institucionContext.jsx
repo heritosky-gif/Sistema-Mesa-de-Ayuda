@@ -39,6 +39,17 @@ export function InstitucionProvider({ children }) {
   const getUsuario = useCallback((id) => usuarios.find((u) => u.idUsuario === id || u.id === id), [usuarios])
   const areasDe = useCallback(() => areas, [areas])
   const aplicarVacio = useCallback(() => ({ ok: false, error: 'Pendiente conectar a Spring Boot' }), [])
+
+  const crearUsuario = useCallback(async (payload) => {
+    try{
+      const response = await axiosClient.post('/api/usuarios/crear', payload);
+      setUsuarios((prev) => [...prev, response.data]);
+      return { ok: true, data: response.data };
+    }catch(error){
+      console.error("Error al insertar en BD" , error);
+      return {ok: false , error : "Hubo un error al guardar el usuario en PostgreSQL."};
+    }
+  } , []);
   
   const value = useMemo(
     () => ({
@@ -58,7 +69,7 @@ export function InstitucionProvider({ children }) {
       renombrarArea: aplicarVacio,
       eliminarArea: aplicarVacio,
       validarCorreo: () => null,
-      crearUsuario: aplicarVacio,
+      crearUsuario,
       editarUsuario: aplicarVacio,
       actualizarPerfil: aplicarVacio,
       cambiarEstatus: () => {},

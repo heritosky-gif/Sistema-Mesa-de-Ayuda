@@ -31,7 +31,7 @@ export default function Usuarios() {
   const [area, setArea] = useState('')
   const [rolNivel, setRolNivel] = useState('')
   const [pagina, setPagina] = useState(1)
-  const [confirmar, setConfirmar] = useState(null) // usuario a activar / desactivar
+  const [confirmar, setConfirmar] = useState(null)
   const [catalogoAbierto, setCatalogoAbierto] = useState(false)
   const [bitacoraAbierta, setBitacoraAbierta] = useState(false)
 
@@ -45,7 +45,6 @@ export default function Usuarios() {
   const visibles = useMemo(() => filterUsuarios(usuarios), [filterUsuarios, usuarios])
   const esSuper = user.rol === ROLES.SUPER_ADMIN
 
-  // Dependencias y áreas disponibles en los filtros (salen del catálogo, no de datos fijos)
   const depsFiltro = useMemo(
     () => (esSuper ? dependencias : dependencias.filter((d) => d.id === user.dependenciaId)),
     [esSuper, dependencias, user.dependenciaId]
@@ -70,14 +69,12 @@ export default function Usuarios() {
     return visibles
       .filter((u) => {
         if (dependenciaValida && u.dependenciaId !== dependenciaValida) return false
-        // Ajustado para leer objeto u.area?.nombre si viene de Spring Boot
         const nombreArea = typeof u.area === 'object' ? u.area?.nombre : u.area
         if (areaSeleccionada && (u.dependenciaId !== areaSeleccionada.dependenciaId || nombreArea !== areaSeleccionada.nombre))
           return false
         if (tipo === 'rol' && u.rol !== valor) return false
         if (tipo === 'nivel' && u.nivel !== valor) return false
         if (!q) return true
-        // Ajustado para buscar en nombreCompleto
         return [(u.nombreCompleto || u.nombre), u.correo, u.rol].some((v) => clave(v || '').includes(q))
       })
       .sort((a, b) => Number(b.activo) - Number(a.activo) || (a.nombreCompleto || a.nombre || '').localeCompare(b.nombreCompleto || b.nombre || ''))
@@ -88,7 +85,6 @@ export default function Usuarios() {
   const desde = (paginaActual - 1) * POR_PAGINA
   const paginaItems = lista.slice(desde, desde + POR_PAGINA)
 
-  // KPIs
   const depsVinculadas = new Set(visibles.map((u) => u.dependenciaId))
   const areasVinculadas = areas.filter((a) => depsVinculadas.has(a.dependenciaId)).length
   const activos = visibles.filter((u) => u.activo).length
@@ -123,7 +119,6 @@ export default function Usuarios() {
         </div>
       )}
 
-      {/* Encabezado */}
       <RutaUsuarios />
       <div className="mt-3 flex flex-wrap items-start justify-between gap-4">
         <div>
@@ -147,7 +142,6 @@ export default function Usuarios() {
         </div>
       </div>
 
-      {/* KPIs */}
       <div className="mt-7 grid gap-4 md:grid-cols-3">
         <Kpi etiqueta="Total Cuentas Registradas" icon={Users} valor={visibles.length} nota="usuarios en plataforma" />
         <Kpi
@@ -164,7 +158,6 @@ export default function Usuarios() {
         />
       </div>
 
-      {/* Directorio */}
       <div className="card mt-6 overflow-hidden">
         <div className="flex flex-wrap items-start justify-between gap-3 px-6 pt-6">
           <div>
@@ -176,7 +169,6 @@ export default function Usuarios() {
           </span>
         </div>
 
-        {/* Filtros */}
         <div className="flex flex-wrap items-center gap-3 px-6 py-6">
           <label className="relative min-w-[240px] flex-[1.6]">
             <span className="sr-only">Buscar usuario</span>
@@ -233,7 +225,6 @@ export default function Usuarios() {
           )}
         </div>
 
-        {/* Tabla */}
         <div className="overflow-x-auto">
           <table className="w-full min-w-[1040px] text-left text-sm">
             <thead className="border-y border-line bg-slate-50 text-xs font-semibold text-slate-600">
@@ -266,7 +257,8 @@ export default function Usuarios() {
                     </td>
                     <td className="px-4 py-5 text-slate-600">{u.correo}</td>
                     <td className="px-4 py-5 leading-relaxed text-slate-500">
-                      {dep?.nombreCorto ?? '—'} — {u.area?.nombre || u.area || 'Sin área asignada'}
+                      {/* Aquí está el blindaje aplicado */}
+                      {dep?.nombreCorto ?? '—'} — {(typeof u.area === 'object' ? u.area?.nombre : u.area) || 'Sin área asignada'}
                     </td>
                     <td className="px-4 py-5 text-slate-900">{u.rol}</td>
                     <td className="px-4 py-5">
@@ -337,7 +329,6 @@ export default function Usuarios() {
         </div>
       </div>
 
-      {/* Confirmación de baja / reactivación */}
       <Modal
         open={!!confirmar}
         onClose={() => setConfirmar(null)}
