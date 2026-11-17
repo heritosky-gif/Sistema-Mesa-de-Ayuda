@@ -206,7 +206,7 @@ export default function Dashboard() {
                       o.estado === ESTADOS_OFICIO.PRIORITARIA ? 'text-amber-600' : 'text-slate-500'
                     }`}
                   >
-                    {formatFechaRelativa(o.fechaLimite, FECHA_ACTUAL)}
+                    o.fechaCreacion ? formatFechaRelativa(o.fechaCreacion) : 'Sin fecha'
                   </td>
                 </tr>
               ))}

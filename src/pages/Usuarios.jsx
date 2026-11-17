@@ -70,14 +70,17 @@ export default function Usuarios() {
     return visibles
       .filter((u) => {
         if (dependenciaValida && u.dependenciaId !== dependenciaValida) return false
-        if (areaSeleccionada && (u.dependenciaId !== areaSeleccionada.dependenciaId || u.area !== areaSeleccionada.nombre))
+        // Ajustado para leer objeto u.area?.nombre si viene de Spring Boot
+        const nombreArea = typeof u.area === 'object' ? u.area?.nombre : u.area
+        if (areaSeleccionada && (u.dependenciaId !== areaSeleccionada.dependenciaId || nombreArea !== areaSeleccionada.nombre))
           return false
         if (tipo === 'rol' && u.rol !== valor) return false
         if (tipo === 'nivel' && u.nivel !== valor) return false
         if (!q) return true
-        return [u.nombre, u.correo, u.puesto].some((v) => clave(v).includes(q))
+        // Ajustado para buscar en nombreCompleto
+        return [(u.nombreCompleto || u.nombre), u.correo, u.rol].some((v) => clave(v || '').includes(q))
       })
-      .sort((a, b) => Number(b.activo) - Number(a.activo) || a.nombre.localeCompare(b.nombre, 'es'))
+      .sort((a, b) => Number(b.activo) - Number(a.activo) || (a.nombreCompleto || a.nombre || '').localeCompare(b.nombreCompleto || b.nombre || ''))
   }, [visibles, busqueda, dependenciaValida, areaSeleccionada, rolNivel])
 
   const totalPaginas = Math.max(1, Math.ceil(lista.length / POR_PAGINA))
@@ -100,7 +103,7 @@ export default function Usuarios() {
   }
 
   const confirmarCambio = () => {
-    cambiarEstatus(confirmar.id, !confirmar.activo, user.id)
+    cambiarEstatus(confirmar.idUsuario || confirmar.id, !confirmar.activo, user.id)
     setConfirmar(null)
   }
 
@@ -150,7 +153,7 @@ export default function Usuarios() {
         <Kpi
           etiqueta="Directores y Subdirectores"
           icon={ShieldCheck}
-          valor={visibles.filter((u) => NIVELES_DIRECTIVOS.includes(u.nivel)).length}
+          valor={visibles.filter((u) => NIVELES_DIRECTIVOS.includes(u.nivel || u.rol)).length}
           nota="con nivel directivo"
         />
         <Kpi
@@ -246,27 +249,29 @@ export default function Usuarios() {
             </thead>
             <tbody className="divide-y divide-line">
               {paginaItems.map((u) => {
-                const dep = getDependencia(u.dependenciaId)
+                const dep = getDependencia(u.dependenciaId || u.area?.dependenciaId)
                 const gestionable = puedeGestionar(user, u)
-                const esYo = u.id === user.id
+                const esYo = (u.idUsuario || u.id) === (user.idUsuario || user.id)
+                const nombreMostrar = u.nombreCompleto || u.nombre || 'Sin nombre'
+                
                 return (
-                  <tr key={u.id} className={u.activo ? '' : 'bg-slate-50/50'}>
+                  <tr key={u.idUsuario || u.id || Math.random()} className={u.activo ? '' : 'bg-slate-50/50'}>
                     <td className="px-6 py-5">
-                      <Avatar name={u.nombre} src={u.foto} size="sm" tone={u.activo ? 'primary' : 'neutral'} />
+                      <Avatar name={nombreMostrar} src={u.foto} size="sm" tone={u.activo ? 'primary' : 'neutral'} />
                       <p className="mt-2 font-semibold text-slate-900">
-                        {u.nombre}
+                        {nombreMostrar}
                         {esYo && <span className="ml-1.5 text-[11px] font-normal text-slate-400">(usted)</span>}
                       </p>
-                      <p className="mt-0.5 text-xs text-slate-500">{u.puesto}</p>
+                      <p className="mt-0.5 text-xs text-slate-500">{u.rol || 'Sin puesto'}</p>
                     </td>
                     <td className="px-4 py-5 text-slate-600">{u.correo}</td>
                     <td className="px-4 py-5 leading-relaxed text-slate-500">
-                      {dep?.nombreCorto ?? '—'} — {u.area}
+                      {dep?.nombreCorto ?? '—'} — {u.area?.nombre || u.area || 'Sin área asignada'}
                     </td>
-                    <td className="px-4 py-5 text-slate-900">{u.nivel}</td>
+                    <td className="px-4 py-5 text-slate-900">{u.rol}</td>
                     <td className="px-4 py-5">
-                      <span className={`inline-block whitespace-nowrap rounded-md px-2.5 py-1 text-xs font-medium ${ESTILO_PERMISO[u.rol]}`}>
-                        {PERMISOS_POR_ROL[u.rol]}
+                      <span className={`inline-block whitespace-nowrap rounded-md px-2.5 py-1 text-xs font-medium ${ESTILO_PERMISO[u.rol] || 'bg-slate-100'}`}>
+                        {PERMISOS_POR_ROL[u.rol] || 'Permisos Básicos'}
                       </span>
                     </td>
                     <td className="px-4 py-5">
@@ -284,7 +289,7 @@ export default function Usuarios() {
                       {gestionable ? (
                         <div className="flex w-36 flex-col gap-2">
                           <Link
-                            to={`/usuarios/${u.id}/editar`}
+                            to={`/usuarios/${u.idUsuario || u.id}/editar`}
                             className="rounded-lg border border-line bg-white px-3 py-1.5 text-center text-sm font-medium text-primary hover:bg-primary-soft"
                           >
                             Editar
@@ -352,12 +357,12 @@ export default function Usuarios() {
         <p className="text-sm text-slate-600">
           {confirmar?.activo ? (
             <>
-              <span className="font-semibold text-slate-900">{confirmar?.nombre}</span> ya no podrá iniciar sesión. Sus
+              <span className="font-semibold text-slate-900">{confirmar?.nombreCompleto || confirmar?.nombre}</span> ya no podrá iniciar sesión. Sus
               oficios e historial se conservan.
             </>
           ) : (
             <>
-              <span className="font-semibold text-slate-900">{confirmar?.nombre}</span> podrá volver a iniciar sesión con
+              <span className="font-semibold text-slate-900">{confirmar?.nombreCompleto || confirmar?.nombre}</span> podrá volver a iniciar sesión con
               su rol actual.
             </>
           )}
@@ -375,7 +380,7 @@ export default function Usuarios() {
               <li key={b.id} className="flex items-start justify-between gap-4 py-3 text-sm">
                 <div>
                   <p className="text-slate-800">{b.accion}</p>
-                  <p className="mt-0.5 text-xs text-slate-500">Por {getUsuario(b.actorId)?.nombre ?? 'Sistema'}</p>
+                  <p className="mt-0.5 text-xs text-slate-500">Por {getUsuario(b.actorId)?.nombreCompleto ?? 'Sistema'}</p>
                 </div>
                 <time className="shrink-0 text-xs text-slate-400" dateTime={b.fecha}>
                   {new Date(b.fecha).toLocaleString('es-MX', { dateStyle: 'short', timeStyle: 'short' })}
