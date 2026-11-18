@@ -4,13 +4,10 @@ import { ArrowRight, CircleCheck, Clock, Ellipsis, Files } from 'lucide-react'
 import { useAuth } from '../context/AuthContext'
 import {
   DIAS_REPORTE,
-  ESTADOS_OFICIO,
   FECHA_ACTUAL,
   OBJETIVO_HORAS_RESOLUCION,
-  ROLES,
 } from '../data/mockData'
 import { useOficios } from '../context/oficiosContext'
-import { useInstitucion } from '../context/institucionContext'
 import StatusBadge from '../components/StatusBadge'
 import BarChart from '../components/charts/BarChart'
 import LineChart from '../components/charts/LineChart'
@@ -21,30 +18,49 @@ import {
   formatFechaRelativa,
   formatHora,
   formatMesAnio,
-  mismoDia,
 } from '../utils/fechas'
 
 const decimal = (n) => n.toFixed(1).replace('.', ',')
 const plural = (n, uno, varios) => `${n.toLocaleString('es-MX')} ${n === 1 ? uno : varios}`
 
-// CORRECCIÓN: Función segura para evitar que crashee si el nombre es indefinido
 const primerNombre = (nombre) => {
   if (!nombre) return 'Usuario';
   return String(nombre).replace(/^(Dr|Dra|Lic|Ing|Mtro|Mtra)\.\s*/i, '').split(' ')[0];
 }
 
-// Cálculo de indicadores a partir de las solicitudes visibles para el rol
-function calcularMetricas(lista) {
-  const abiertas = lista.filter((o) => o.estado !== ESTADOS_OFICIO.RESUELTA)
-  const resueltas = lista.filter((o) => o.estado === ESTADOS_OFICIO.RESUELTA)
+const normalizarFecha = (fecha) => {
+  if (!fecha) return new Date().toISOString()
+  if (typeof fecha === 'string') return fecha
+  if (Array.isArray(fecha)) {
+    const [y, M, d, h=0, mnt=0, s=0] = fecha
+    return new Date(y, M-1, d, h, mnt, s).toISOString()
+  }
+  return new Date().toISOString()
+}
 
-  const volumen = DIAS_REPORTE.map((dia) => lista.filter((o) => o.fechaCreacion.startsWith(dia)).length)
+function calcularMetricas(lista) {
+  if (!lista || lista.length === 0) {
+    return { total: 0, abiertas: 0, resueltas: 0, vencenHoy: 0, volumen: [], horas: [], promedioHoras: null, recientes: [] }
+  }
+
+  const esResuelto = (o) => {
+    const e = String(o.estatus || o.estado || '').toUpperCase()
+    return e === 'RESUELTO' || e === 'FINALIZADO'
+  }
+
+  const abiertas = lista.filter((o) => !esResuelto(o))
+  const resueltas = lista.filter((o) => esResuelto(o))
+
+  const volumen = DIAS_REPORTE.map((dia) => 
+    lista.filter((o) => normalizarFecha(o.fechaCreacion || o.fecha).startsWith(dia)).length
+  )
 
   const horas = DIAS_REPORTE.map((dia) => {
-    const delDia = resueltas.filter((o) => o.fechaCreacion.startsWith(dia))
+    const delDia = resueltas.filter((o) => normalizarFecha(o.fechaCreacion || o.fecha).startsWith(dia))
     if (delDia.length === 0) return null
-    return Math.round((delDia.reduce((s, o) => s + o.horasResolucion, 0) / delDia.length) * 10) / 10
+    return Math.round((delDia.reduce((s, o) => s + (o.horasResolucion || 24), 0) / delDia.length) * 10) / 10
   })
+  
   const conDato = horas.filter((h) => h != null)
   const promedioHoras = conDato.length ? conDato.reduce((s, h) => s + h, 0) / conDato.length : null
 
@@ -52,26 +68,32 @@ function calcularMetricas(lista) {
     total: lista.length,
     abiertas: abiertas.length,
     resueltas: resueltas.length,
-    vencenHoy: abiertas.filter((o) => mismoDia(o.fechaLimite, FECHA_ACTUAL)).length,
+    vencenHoy: 0, 
     volumen,
     horas,
     promedioHoras,
-    recientes: [...lista].sort((a, b) => b.fechaCreacion.localeCompare(a.fechaCreacion)).slice(0, 4),
+    recientes: [...lista]
+      .sort((a, b) => normalizarFecha(b.fechaCreacion).localeCompare(normalizarFecha(a.fechaCreacion)))
+      .slice(0, 4),
   }
 }
 
 export default function Dashboard() {
-  const { user, role, dependencia, filterOficios } = useAuth()
+  const { user, filterOficios } = useAuth()
   const navigate = useNavigate()
   const { oficios } = useOficios()
-  const { getDependencia } = useInstitucion()
+  
+  // Procesamos solo los tickets que este rol tiene permitido ver
   const m = useMemo(() => calcularMetricas(filterOficios(oficios)), [filterOficios, oficios])
 
+  // Subtítulo dinámico dependiendo del rol
+  const rolUsuario = String(user?.rol || '').toUpperCase()
   const alcance = {
-    [ROLES.SUPER_ADMIN]: 'en todas las dependencias',
-    [ROLES.ADMIN_DEPENDENCIA]: `en ${dependencia?.nombre}`,
-    [ROLES.USUARIO_COMUN]: 'creadas por ti o asignadas a ti',
-  }[role]
+    'ADMIN': 'en todo el sistema',
+    'INTERMEDIARIO': 'pendientes por despachar',
+    'TECNICO': 'asignadas a tu área',
+    'SOLICITANTE': 'creadas por ti',
+  }[rolUsuario] || 'en tu bandeja'
 
   const kpis = [
     { label: 'Total Solicitudes', value: m.total, icon: Files },
@@ -82,9 +104,9 @@ export default function Dashboard() {
   const barData = DIAS_REPORTE.map((dia, i) => ({
     key: dia,
     label: diaDelMes(dia),
-    value: m.volumen[i],
+    value: m.volumen[i] || 0,
     tooltipTitle: diaCorto(dia),
-    tooltipValue: plural(m.volumen[i], 'solicitud', 'solicitudes'),
+    tooltipValue: plural(m.volumen[i] || 0, 'solicitud', 'solicitudes'),
   }))
 
   const lineData = DIAS_REPORTE.map((dia, i) => ({
@@ -106,18 +128,16 @@ export default function Dashboard() {
         </p>
       </div>
 
-      {/* Fila 1: fecha + KPIs */}
+      
       <div className="grid gap-4 sm:grid-cols-3 xl:grid-cols-[1.75fr_1fr_1fr_1fr]">
         <div className="relative overflow-hidden rounded-card bg-primary p-6 pr-16 text-white sm:col-span-3 xl:col-span-1">
           <div className="absolute inset-y-0 right-0 w-9 bg-primary-hover" aria-hidden="true" />
           <p className="text-[11px] font-semibold tracking-wide text-white/85">
             {formatFechaInstitucional(FECHA_ACTUAL)}
           </p>
-          {/* CORRECCIÓN: Leemos la propiedad nombre_completo que manda tu Spring Boot */}
-          <p className="mt-3 text-lg font-semibold">Hola, {primerNombre(user?.nombre_completo || user?.nombre)}</p>
+          <p className="mt-3 text-lg font-semibold">Hola, {primerNombre(user?.nombreCompleto || user?.nombre_completo || user?.nombre)}</p>
           <p className="mt-0.5 text-sm text-white/75">
-            {plural(m.abiertas, 'solicitud abierta', 'solicitudes abiertas')}
-            {m.vencenHoy > 0 && ` · ${plural(m.vencenHoy, 'vence', 'vencen')} hoy`} {alcance}.
+            {plural(m.abiertas, 'solicitud abierta', 'solicitudes abiertas')} {alcance}.
           </p>
         </div>
 
@@ -132,7 +152,7 @@ export default function Dashboard() {
         ))}
       </div>
 
-      {/* Fila 2: gráficas */}
+      
       <div className="grid gap-5 lg:grid-cols-2">
         <ChartCard
           title="Volumen de Tickets por Día"
@@ -159,7 +179,7 @@ export default function Dashboard() {
         </ChartCard>
       </div>
 
-      {/* Fila 3: solicitudes recientes */}
+      
       <div className="card overflow-hidden">
         <div className="flex items-center justify-between gap-3 px-5 py-4">
           <div className="flex items-center gap-3">
@@ -181,39 +201,38 @@ export default function Dashboard() {
             <thead className="border-y border-line bg-slate-50 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
               <tr>
                 <th className="px-5 py-3 font-semibold">Folio / Asunto</th>
-                <th className="px-5 py-3 font-semibold">Dependencia</th>
+                <th className="px-5 py-3 font-semibold">Área</th>
                 <th className="px-5 py-3 font-semibold">Estado</th>
-                <th className="px-5 py-3 font-semibold">Fecha límite</th>
+                <th className="px-5 py-3 font-semibold">Recibido</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-line">
-              {m.recientes.map((o) => (
-                <tr
-                  key={o.idTicket}
-                  onClick={() => navigate(`/oficios/${o.id}`)}
-                  className="cursor-pointer transition-colors hover:bg-slate-50"
-                >
-                  <td className="px-5 py-3">
-                    <p className="text-xs font-semibold text-primary">{o.folio}</p>
-                    <p className="mt-0.5 text-sm text-slate-800">{o.asunto}</p>
-                  </td>
-                  <td className="px-5 py-3 text-sm text-slate-500">{getDependencia(o.dependenciaId)?.nombreCorto}</td>
-                  <td className="px-5 py-3">
-                    <StatusBadge estado={o.estado} />
-                  </td>
-                  <td
-                    className={`px-5 py-3 text-sm ${
-                      o.estado === ESTADOS_OFICIO.PRIORITARIA ? 'text-amber-600' : 'text-slate-500'
-                    }`}
+              {m.recientes.map((o) => {
+                const idReal = o.idTicket || o.id;
+                return (
+                  <tr
+                    key={idReal}
+                    onClick={() => navigate(`/oficios/${idReal}`)}
+                    className="cursor-pointer transition-colors hover:bg-slate-50"
                   >
-                    o.fechaCreacion ? formatFechaRelativa(o.fechaCreacion) : 'Sin fecha'
-                  </td>
-                </tr>
-              ))}
+                    <td className="px-5 py-3">
+                      <p className="text-xs font-semibold text-primary">#{idReal || o.folio}</p>
+                      <p className="mt-0.5 text-sm text-slate-800">{o.titulo || o.asunto}</p>
+                    </td>
+                    <td className="px-5 py-3 text-sm text-slate-500">{o.area?.nombre || 'Sin Área'}</td>
+                    <td className="px-5 py-3">
+                      <StatusBadge estado={o.estatus || o.estado} />
+                    </td>
+                    <td className="px-5 py-3 text-sm text-slate-500">
+                      {o.fechaCreacion ? formatFechaRelativa(normalizarFecha(o.fechaCreacion)) : 'Sin fecha'}
+                    </td>
+                  </tr>
+                )
+              })}
             </tbody>
           </table>
           {m.recientes.length === 0 && (
-            <p className="px-5 py-10 text-center text-sm text-slate-500">No hay solicitudes para mostrar.</p>
+            <p className="px-5 py-10 text-center text-sm text-slate-500">No hay solicitudes recientes para mostrar.</p>
           )}
         </div>
       </div>
