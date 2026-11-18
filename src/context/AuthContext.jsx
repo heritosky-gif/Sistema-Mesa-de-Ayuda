@@ -14,9 +14,13 @@ const ROLES = {
 }
 
 const PERMISSIONS = {
-  [ROLES.ADMIN]: ['ver_estadisticas', 'gestionar_usuarios', 'crear_oficio', 'ver_todas_dependencias'],
-  [ROLES.TECNICO]: ['ver_estadisticas', 'crear_oficio'],
-  [ROLES.INTERMEDIARIO]: ['ver_estadisticas', 'crear_oficio'],
+  //El Admin es el ÚNICO con acceso a estadísticas y gestión de usuarios
+  [ROLES.ADMIN]: ['ver_estadisticas', 'gestionar_usuarios', 'crear_oficio', 'ver_todas_dependencias' , 'asignar_tickets'],
+  //Solo atiende los tickets que tiene asignado
+  [ROLES.TECNICO]: ['atender_tickets', 'crear_oficio'],
+  //Gestiona tickets y los asigna, pero no ve metricas ni crea usuarios
+  [ROLES.INTERMEDIARIO]: ['ver_estadisticas', 'crear_oficio' , 'ver_todas_dependencias'],
+  //Solo levanta oficios/tickets
   [ROLES.SOLICITANTE]: ['crear_oficio'],
 }
 
@@ -81,14 +85,43 @@ export function AuthProvider({ children }) {
 
   const role = user?.rol ?? null
   // Permitimos todos los permisos si el usuario existe para evitar bloqueos por nombres de roles distintos a "ADMIN"
-  const can = useCallback((permission) => !!role, [role])
+  const can = useCallback((permission) => {
+    return !!role && PERMISSIONS[role]?.includes(permission);
+  }, [role]);
 
   const filterOficios = useCallback((lista) => {
-      if (!user) return []
-      // Por el momento, permitimos ver todos los oficios mientras se ajustan los roles definitivos
-      return lista; 
-    }, [user]
-  )
+    if (!user || !lista) return [];
+
+    const rolUsuario = String(user.rol || '').toUpperCase();
+
+    const miId = user.idUsuario || user.id;
+
+    if (rolUsuario === 'ADMIN' || rolUsuario === 'INTERMEDIARIO') {
+      return lista;
+    }
+
+    if (rolUsuario === 'TECNICO') {
+      // Solo ve los tickets de su área
+      const miAreaId = user.area?.idArea || user.area?.id;
+      return lista.filter(o => {
+        const ticketAreaId = o.area?.idArea || o.area?.id || o.dependenciaId;
+        return ticketAreaId == miAreaId; 
+      });
+    }
+
+    if (rolUsuario === 'SOLICITANTE') {
+      // SOLO ve los tickets donde él es el creador
+      return lista.filter(o => {
+        const idCreador = o.solicitante?.idUsuario || 
+                          o.solicitante?.id || 
+                          o.usuario?.idUsuario || 
+                          o.creadoPorId || 
+                          o.idUsuario;          
+        return idCreador == miId;
+      });
+    }
+    return [];
+  }, [user]);
 
   const filterUsuarios = useCallback((lista) => {
       if (!user) return []

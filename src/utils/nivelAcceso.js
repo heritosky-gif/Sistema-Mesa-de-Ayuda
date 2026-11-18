@@ -1,47 +1,42 @@
-import { ROLES } from '../data/mockData'
-
-/**
- * Niveles de acceso que se muestran como tarjetas en los formularios de usuario.
- * Cada uno define el rol de permisos y los niveles jerárquicos que agrupa (el primero es el predeterminado).
- */
 export const NIVELES_ACCESO = [
   {
-    id: 'directivo',
-    titulo: 'Subdirector / Director',
-    descripcion: 'Acceso completo global a todas las solicitudes y reportes de la dependencia.',
-    rol: ROLES.ADMIN_DEPENDENCIA,
-    niveles: ['Director', 'Subdirector'],
+    id: 'admin',
+    titulo: 'Administrador del Sistema',
+    descripcion: 'Acceso total a estadísticas, gestión de usuarios, catálogos y configuración global.',
+    rol: 'ADMIN',
+    niveles: ['Director', 'Coordinador'] 
   },
   {
-    id: 'jefe',
-    titulo: 'Jefe de Área / Departamento',
-    descripcion: 'Gestión y asignación de tickets dentro de su área específica.',
-    rol: ROLES.USUARIO_COMUN,
-    niveles: ['Jefe de Área', 'Coordinador'],
+    id: 'intermediario',
+    titulo: 'Mesa de Ayuda (Despachador)',
+    descripcion: 'Recepción, gestión y asignación de tickets entrantes a las áreas o técnicos correspondientes.',
+    rol: 'INTERMEDIARIO',
+    niveles: ['Jefe de Departamento', 'Supervisor']
   },
   {
-    id: 'operativo',
-    titulo: 'Analista / Operativo',
-    descripcion: 'Atención, seguimiento y respuesta de tickets asignados.',
-    rol: ROLES.USUARIO_COMUN,
-    niveles: ['Analista / Operativo', 'Enlace / Auxiliar'],
+    id: 'tecnico',
+    titulo: 'Soporte Técnico',
+    descripcion: 'Atención, seguimiento y resolución de los tickets asignados a su área operativa.',
+    rol: 'TECNICO',
+    niveles: ['Especialista', 'Analista']
   },
   {
-    id: 'estatal',
-    titulo: 'Administrador Estatal',
-    descripcion: 'Acceso total a todas las dependencias, usuarios y catálogos del sistema.',
-    rol: ROLES.SUPER_ADMIN,
-    niveles: ['Director General', 'Director'],
-  },
+    id: 'solicitante',
+    titulo: 'Usuario Solicitante',
+    descripcion: 'Creación de tickets de soporte y seguimiento exclusivo a sus propias solicitudes.',
+    rol: 'SOLICITANTE',
+    niveles: ['Administrativo', 'Operativo']
+  }
 ]
 
-/** id de la tarjeta de nivel de acceso que corresponde a un usuario */
 export function grupoDe(usuario) {
-  if (!usuario) return 'directivo'
-  if (usuario.rol === ROLES.SUPER_ADMIN) return 'estatal'
-  if (usuario.rol === ROLES.ADMIN_DEPENDENCIA) return 'directivo'
-  return NIVELES_ACCESO[1].niveles.includes(usuario.nivel) ? 'jefe' : 'operativo'
+  if (!usuario || !usuario.rol) return 'solicitante'
+  const grupo = NIVELES_ACCESO.find((g) => g.rol === usuario.rol)
+  return grupo ? grupo.id : 'solicitante'
 }
 
-/** Título del nivel de acceso de un usuario ("Analista / Operativo", …) */
-export const tituloNivelAcceso = (usuario) => NIVELES_ACCESO.find((g) => g.id === grupoDe(usuario))?.titulo
+export function tituloNivelAcceso(usuario) {
+  if (!usuario || !usuario.rol) return 'Usuario'
+  const grupo = NIVELES_ACCESO.find((g) => g.rol === usuario.rol)
+  return grupo ? grupo.titulo : 'Usuario'
+}
