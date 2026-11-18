@@ -1,40 +1,75 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { ShieldLock, UserRound } from 'lucide-react'
 import { useAuth } from '../context/AuthContext'
-import { useInstitucion } from '../context/institucionContext'
+import axiosClient from '../api/axiosClient'
 import UsuarioForm from '../components/UsuarioForm'
 import RutaConfiguracion from '../components/RutaConfiguracion'
 import Modal from '../components/Modal'
-import { puedeGestionar } from '../utils/permisosUsuarios'
 
 export default function EditarUsuario() {
   const { id } = useParams()
   const { user } = useAuth()
-  const { getUsuario, editarUsuario, cambiarEstatus } = useInstitucion()
   const navigate = useNavigate()
+  
+  const [usuario, setUsuario] = useState(null)
+  const [loading, setLoading] = useState(true)
   const [confirmar, setConfirmar] = useState(false)
-  const usuario = getUsuario(id)
+
+  useEffect(() => {
+    axiosClient.get(`/api/usuarios/${id}`)
+      .then(res => {
+        setUsuario(res.data)
+        setLoading(false)
+      })
+      .catch(err => {
+        console.error("Error al cargar expediente:", err)
+        setLoading(false)
+      })
+  }, [id])
+
+  if (loading) return <p className="mt-10 text-center text-sm text-slate-500">Cargando expediente...</p>
 
   if (!usuario) {
     return <Aviso icon={UserRound} titulo="Usuario no encontrado" texto={`No existe ninguna cuenta con el identificador "${id}".`} />
   }
-  if (!puedeGestionar(user, usuario)) {
-    return <Aviso icon={ShieldLock} titulo="Sin permiso para editar esta cuenta" texto="Solo puede editar cuentas de su propia dependencia." />
+
+  //Solo el ADMIN o el mismo usuario pueden editar esta pantalla
+  const rolUsuarioActual = String(user.rol || '').toUpperCase()
+  const esAdmin = rolUsuarioActual === 'ADMIN'
+  const esYo = (usuario.idUsuario || usuario.id) == (user.idUsuario || user.id)
+
+  if (!esAdmin && !esYo) {
+    return <Aviso icon={ShieldLock} titulo="Acceso denegado" texto="Solo los administradores pueden editar otras cuentas." />
   }
 
-  const esYo = usuario.id === user.id
+  const guardar = async (datos) => {
+    try {
+      const paqueteLimpio = {
+        nombreCompleto: datos.nombreCompleto || datos.nombre, // Cubrimos ambas variables por si acaso
+        correo: datos.correo,
+        rol: datos.rol
+      };
 
-  const guardar = (datos) => {
-    const r = editarUsuario(usuario.id, datos, user.id)
-    if (r.ok) navigate('/usuarios', { state: { aviso: `Se actualizó el expediente de ${datos.nombre}.` } })
-    return r
+      await axiosClient.put(`/api/usuarios/${id}`, paqueteLimpio)
+      
+      navigate('/usuarios', { state: { aviso: `Se actualizó el expediente de ${paqueteLimpio.nombreCompleto}.` } })
+      return { ok: true }
+    } catch (error) {
+      console.error(error)
+      return { ok: false, error: 'Error al actualizar en la base de datos.' }
+    }
   }
 
-  // La baja / reactivación se aplica al confirmar, sin esperar a "Guardar Cambios"
-  const cambiarCuenta = () => {
-    cambiarEstatus(usuario.id, !usuario.activo, user.id)
-    setConfirmar(false)
+  //Cambiar estado / Baja lógica
+  const cambiarCuenta = async () => {
+    try {
+      await axiosClient.put(`/api/usuarios/${id}/estatus`, { activo: !usuario.activo })
+      setConfirmar(false)
+      navigate('/usuarios', { state: { aviso: `La cuenta ha sido ${usuario.activo ? 'dada de baja' : 'reactivada'}.` } })
+    } catch (error) {
+      console.error(error)
+    }
   }
 
   const accionesCuenta = (
@@ -68,13 +103,11 @@ export default function EditarUsuario() {
         Editar Expediente de Usuario
       </h1>
       <p className="mb-7 mt-3 text-[15px] leading-relaxed text-slate-500">
-        Modifique la información del servidor público, reasigne su dependencia o actualice sus permisos de acceso al
-        sistema.
+        Modifique la información del servidor público, reasigne su área o actualice sus permisos de acceso.
       </p>
 
-      {/* `key` reinicia el formulario si se navega a otro usuario */}
       <UsuarioForm
-        key={usuario.id}
+        key={usuario.idUsuario || usuario.id}
         modo="editar"
         inicial={usuario}
         onGuardar={guardar}
@@ -82,24 +115,14 @@ export default function EditarUsuario() {
         accionesCuenta={accionesCuenta}
       />
 
-      <Modal
-        open={confirmar}
-        onClose={() => setConfirmar(false)}
-        size="sm"
-        title={usuario.activo ? '¿Dar de baja esta cuenta?' : '¿Reactivar esta cuenta?'}
-        footer={
+      <Modal open={confirmar} onClose={() => setConfirmar(false)} size="sm" title={usuario.activo ? '¿Dar de baja esta cuenta?' : '¿Reactivar esta cuenta?'} footer={
           <>
-            <button className="btn-secondary" onClick={() => setConfirmar(false)}>
-              Cancelar
-            </button>
-            <button className="btn-primary" onClick={cambiarCuenta}>
-              {usuario.activo ? 'Sí, dar de baja' : 'Sí, reactivar'}
-            </button>
+            <button className="btn-secondary" onClick={() => setConfirmar(false)}>Cancelar</button>
+            <button className="btn-primary" onClick={cambiarCuenta}>{usuario.activo ? 'Sí, dar de baja' : 'Sí, reactivar'}</button>
           </>
-        }
-      >
+        }>
         <p className="text-sm text-slate-600">
-          <span className="font-semibold text-slate-900">{usuario.nombre}</span>{' '}
+          <span className="font-semibold text-slate-900">{usuario.nombreCompleto || usuario.nombre}</span>{' '}
           {usuario.activo
             ? 'ya no podrá iniciar sesión. Sus oficios e historial se conservan.'
             : 'podrá volver a iniciar sesión con su nivel de acceso actual.'}
@@ -112,14 +135,10 @@ export default function EditarUsuario() {
 function Aviso({ icon: Icon, titulo, texto }) {
   return (
     <div className="card mx-auto mt-10 flex max-w-lg flex-col items-center px-8 py-14 text-center">
-      <div className="flex h-12 w-12 items-center justify-center rounded-full bg-primary-soft text-primary">
-        <Icon size={22} />
-      </div>
+      <div className="flex h-12 w-12 items-center justify-center rounded-full bg-primary-soft text-primary"><Icon size={22} /></div>
       <h1 className="mt-4 text-lg font-semibold text-slate-900">{titulo}</h1>
       <p className="mt-1 text-sm text-slate-500">{texto}</p>
-      <Link to="/usuarios" className="btn-primary mt-6">
-        Volver a Usuarios
-      </Link>
+      <Link to="/usuarios" className="btn-primary mt-6">Volver a Usuarios</Link>
     </div>
   )
 }

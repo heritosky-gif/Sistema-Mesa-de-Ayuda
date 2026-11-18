@@ -1,8 +1,9 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { Building, ChevronDown, CircleCheck, Plus, Search, ShieldCheck, Users, X } from 'lucide-react'
 import { useAuth } from '../context/AuthContext'
 import { useInstitucion } from '../context/institucionContext'
+import axiosClient from '../api/axiosClient'
 import { NIVELES, NIVELES_DIRECTIVOS, PERMISOS_POR_ROL, ROLES, ROLE_LABELS } from '../data/mockData'
 import Avatar from '../components/Avatar'
 import Modal from '../components/Modal'
@@ -15,14 +16,15 @@ import { clave } from '../utils/texto'
 const POR_PAGINA = 10
 
 const ESTILO_PERMISO = {
-  super_admin: 'bg-primary-soft text-primary',
-  admin_dependencia: 'bg-slate-100 text-slate-600',
-  usuario_comun: 'bg-slate-100 text-slate-600',
+  ADMIN: 'bg-primary-soft text-primary',
+  INTERMEDIARIO: 'bg-amber-50 text-amber-700',
+  TECNICO: 'bg-emerald-50 text-emerald-700',
+  SOLICITANTE: 'bg-slate-100 text-slate-600',
 }
 
 export default function Usuarios() {
   const { user, filterUsuarios } = useAuth()
-  const { usuarios, dependencias, areas, getDependencia, cambiarEstatus, bitacora, getUsuario } = useInstitucion()
+  const { dependencias, areas, getDependencia, bitacora, getUsuario } = useInstitucion()
   const location = useLocation()
   const navigate = useNavigate()
 
@@ -35,6 +37,15 @@ export default function Usuarios() {
   const [catalogoAbierto, setCatalogoAbierto] = useState(false)
   const [bitacoraAbierta, setBitacoraAbierta] = useState(false)
 
+
+  const [usuariosReales, setUsuariosReales] = useState([])
+
+  useEffect(() => {
+    axiosClient.get('/api/usuarios/todos')
+      .then(res => setUsuariosReales(res.data))
+      .catch(console.error)
+  }, [])
+
   const aviso = location.state?.aviso
   const cerrarAviso = () => navigate(location.pathname, { replace: true, state: null })
   const conReinicio = (setter) => (valor) => {
@@ -42,14 +53,16 @@ export default function Usuarios() {
     setPagina(1)
   }
 
-  const visibles = useMemo(() => filterUsuarios(usuarios), [filterUsuarios, usuarios])
-  const esSuper = user.rol === ROLES.SUPER_ADMIN
+  const visibles = useMemo(() => filterUsuarios(usuariosReales), [filterUsuarios, usuariosReales])
+  const esSuper = String(user.rol).toUpperCase() === 'ADMIN'
 
   const depsFiltro = useMemo(
     () => (esSuper ? dependencias : dependencias.filter((d) => d.id === user.dependenciaId)),
     [esSuper, dependencias, user.dependenciaId]
   )
+  
   const dependenciaValida = depsFiltro.some((d) => d.id === dependencia) ? dependencia : ''
+  
   const areasFiltro = useMemo(() => {
     const ids = dependenciaValida ? [dependenciaValida] : depsFiltro.map((d) => d.id)
     return depsFiltro
@@ -60,6 +73,7 @@ export default function Usuarios() {
       }))
       .filter((g) => g.areas.length)
   }, [depsFiltro, dependenciaValida, areas])
+  
   const areaValida = areasFiltro.some((g) => g.areas.some((a) => a.id === area)) ? area : ''
   const areaSeleccionada = areas.find((a) => a.id === areaValida)
 
@@ -98,9 +112,16 @@ export default function Usuarios() {
     setPagina(1)
   }
 
-  const confirmarCambio = () => {
-    cambiarEstatus(confirmar.idUsuario || confirmar.id, !confirmar.activo, user.id)
-    setConfirmar(null)
+  const confirmarCambio = async () => {
+    try {
+      const idReal = confirmar.idUsuario || confirmar.id;
+      await axiosClient.put(`/api/usuarios/${idReal}/estatus`, { activo: !confirmar.activo });
+      // Refrescamos el estatus en la pantalla instantáneamente sin recargar la página
+      setUsuariosReales(prev => prev.map(u => (u.idUsuario || u.id) === idReal ? { ...u, activo: !u.activo } : u));
+      setConfirmar(null);
+    } catch (error) {
+      console.error("Error al cambiar estatus:", error);
+    }
   }
 
   return (
@@ -126,8 +147,7 @@ export default function Usuarios() {
             Gestión de Usuarios y Accesos Institucionales
           </h1>
           <p className="mt-3 text-sm text-slate-500">
-            Módulo exclusivo de administración para consulta de personal, asignación de dependencias y control de
-            accesos.
+            Módulo exclusivo de administración para consulta de personal, asignación de dependencias y control de accesos.
           </p>
         </div>
         <div className="flex flex-wrap gap-3">
@@ -181,43 +201,6 @@ export default function Usuarios() {
               className="h-11 w-full rounded-lg border border-line bg-canvas pl-11 pr-4 text-sm text-slate-800 placeholder:text-slate-500 focus:border-primary focus:bg-white focus:outline-none focus:ring-2 focus:ring-primary/20"
             />
           </label>
-          <FiltroSelect etiqueta="Dependencia" value={dependenciaValida} onChange={conReinicio(setDependencia)}>
-            <option value="">Todas</option>
-            {depsFiltro.map((d) => (
-              <option key={d.id} value={d.id}>
-                {d.nombreCorto}
-              </option>
-            ))}
-          </FiltroSelect>
-          <FiltroSelect etiqueta="Área / Departamento" value={areaValida} onChange={conReinicio(setArea)}>
-            <option value="">Todos</option>
-            {areasFiltro.map((g) => (
-              <optgroup key={g.dep.id} label={g.dep.nombreCorto}>
-                {g.areas.map((a) => (
-                  <option key={a.id} value={a.id}>
-                    {a.nombre}
-                  </option>
-                ))}
-              </optgroup>
-            ))}
-          </FiltroSelect>
-          <FiltroSelect etiqueta="Rol / Nivel" value={rolNivel} onChange={conReinicio(setRolNivel)}>
-            <option value="">Todos</option>
-            <optgroup label="Rol de acceso">
-              {Object.values(ROLES).map((r) => (
-                <option key={r} value={`rol:${r}`}>
-                  {ROLE_LABELS[r]}
-                </option>
-              ))}
-            </optgroup>
-            <optgroup label="Nivel jerárquico">
-              {NIVELES.map((n) => (
-                <option key={n} value={`nivel:${n}`}>
-                  {n}
-                </option>
-              ))}
-            </optgroup>
-          </FiltroSelect>
           {hayFiltros && (
             <button onClick={restablecer} className="text-sm font-medium text-primary hover:text-primary-hover">
               Restablecer
@@ -232,8 +215,7 @@ export default function Usuarios() {
                 <th className="px-6 py-4 font-semibold">Usuario</th>
                 <th className="px-4 py-4 font-semibold">Correo Institucional</th>
                 <th className="px-4 py-4 font-semibold">Dependencia y Área</th>
-                <th className="px-4 py-4 font-semibold">Rol / Nivel</th>
-                <th className="px-4 py-4 font-semibold">Permisos / Acceso</th>
+                <th className="px-4 py-4 font-semibold">Rol de Acceso</th>
                 <th className="px-4 py-4 font-semibold">Estatus</th>
                 <th className="px-6 py-4 font-semibold">Acciones</th>
               </tr>
@@ -241,9 +223,10 @@ export default function Usuarios() {
             <tbody className="divide-y divide-line">
               {paginaItems.map((u) => {
                 const dep = getDependencia(u.dependenciaId || u.area?.dependenciaId)
-                const gestionable = puedeGestionar(user, u)
+                const gestionable = String(user?.rol || '').toUpperCase() === 'ADMIN'
                 const esYo = (u.idUsuario || u.id) === (user.idUsuario || user.id)
                 const nombreMostrar = u.nombreCompleto || u.nombre || 'Sin nombre'
+                const rolLimpio = String(u.rol || 'SIN_ROL').toUpperCase()
                 
                 return (
                   <tr key={u.idUsuario || u.id || Math.random()} className={u.activo ? '' : 'bg-slate-50/50'}>
@@ -253,17 +236,15 @@ export default function Usuarios() {
                         {nombreMostrar}
                         {esYo && <span className="ml-1.5 text-[11px] font-normal text-slate-400">(usted)</span>}
                       </p>
-                      <p className="mt-0.5 text-xs text-slate-500">{u.rol || 'Sin puesto'}</p>
+                      <p className="mt-0.5 text-xs text-slate-500">{u.puesto || 'Servidor Público'}</p>
                     </td>
                     <td className="px-4 py-5 text-slate-600">{u.correo}</td>
                     <td className="px-4 py-5 leading-relaxed text-slate-500">
-                      {/* Aquí está el blindaje aplicado */}
                       {dep?.nombreCorto ?? '—'} — {(typeof u.area === 'object' ? u.area?.nombre : u.area) || 'Sin área asignada'}
                     </td>
-                    <td className="px-4 py-5 text-slate-900">{u.rol}</td>
                     <td className="px-4 py-5">
-                      <span className={`inline-block whitespace-nowrap rounded-md px-2.5 py-1 text-xs font-medium ${ESTILO_PERMISO[u.rol] || 'bg-slate-100'}`}>
-                        {PERMISOS_POR_ROL[u.rol] || 'Permisos Básicos'}
+                      <span className={`inline-block whitespace-nowrap rounded-md px-2.5 py-1 text-[11px] font-semibold ${ESTILO_PERMISO[rolLimpio] || 'bg-slate-100 text-slate-600'}`}>
+                        {rolLimpio}
                       </span>
                     </td>
                     <td className="px-4 py-5">
