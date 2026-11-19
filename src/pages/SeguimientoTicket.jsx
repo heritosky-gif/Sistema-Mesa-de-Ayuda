@@ -7,10 +7,12 @@ import {
   ClipboardList,
   Lock,
   MessagesSquare,
+  Paperclip,
   Send,
   ShieldLock,
   FileText,
   UserCheck,
+  X,
 } from 'lucide-react'
 import { useAuth } from '../context/AuthContext'
 import { useOficios } from '../context/oficiosContext'
@@ -58,7 +60,10 @@ function Seguimiento({ oficio, user, role }) {
   const idReal = oficio.idTicket || oficio.id
 
   const [mensajes, setMensajes] = useState([])
+  const [evidencias, setEvidencias] = useState([])
   const [texto, setTexto] = useState('')
+  const [archivoAdjunto, setArchivoAdjunto] = useState(null)
+  const [subiendo, setSubiendo] = useState(false)
   const [confirmar, setConfirmar] = useState(false)
   const [aviso, setAviso] = useState(null)
 
@@ -72,6 +77,7 @@ function Seguimiento({ oficio, user, role }) {
   const [asignando, setAsignando] = useState(false)
 
   const finConversacion = useRef(null)
+  const inputArchivoRef = useRef(null)
 
   const [estado, setEstado] = useState((oficio.estatus || oficio.estado || 'PENDIENTE').toUpperCase())
   const resuelta = estado === 'RESUELTO' || estado === 'FINALIZADO'
@@ -86,6 +92,12 @@ function Seguimiento({ oficio, user, role }) {
         bajarAlFinal()
       })
       .catch(err => console.error('Error al cargar comentarios:', err))
+  }, [idReal])
+
+  useEffect(() => {
+    axiosClient.get(`/api/tickets/${idReal}/evidencias`)
+      .then(res => setEvidencias(res.data))
+      .catch(err => console.error('Error al cargar evidencias:', err))
   }, [idReal])
 
   useEffect(() => {
@@ -120,6 +132,22 @@ function Seguimiento({ oficio, user, role }) {
   const bajarAlFinal = () =>
     requestAnimationFrame(() => finConversacion.current?.scrollIntoView({ behavior: 'smooth', block: 'end' }))
 
+  const abrirEvidencia = async (ev) => {
+    try {
+      let ruta = ev.rutaArchivo || ev.url || ev.nombreArchivo || ''
+      if (ruta && !ruta.startsWith('/uploads/') && !ruta.startsWith('http')) {
+        const soloNombre = ruta.split(/[\\/]/).pop()
+        ruta = `/uploads/${soloNombre}`
+      }
+      const res = await axiosClient.get(ruta, { responseType: 'blob' })
+      const blobUrl = URL.createObjectURL(res.data)
+      window.open(blobUrl, '_blank', 'noopener,noreferrer')
+    } catch (error) {
+      console.error('Error al abrir evidencia:', error)
+      setAviso('No se pudo abrir el archivo adjunto.')
+    }
+  }
+
   const asignarTecnico = async () => {
     if (!tecnicoSeleccionado) return
     setAsignando(true)
@@ -140,21 +168,41 @@ function Seguimiento({ oficio, user, role }) {
   }
 
   const enviar = async () => {
-    if (!texto.trim()) return
-
-    const payload = {
-      texto: texto.trim(),
-      autor: { idUsuario: user.idUsuario || user.id }
-    }
+    if (!texto.trim() && !archivoAdjunto) return
+    setSubiendo(true)
 
     try {
+      let archivoUrl = null
+      let archivoNombre = null
+
+      if (archivoAdjunto) {
+        const formData = new FormData()
+        formData.append('archivo', archivoAdjunto)
+        const resArchivo = await axiosClient.post('/api/archivos/subir', formData, {
+          headers: { 'Content-Type': undefined },
+        })
+        archivoUrl = resArchivo.data.url
+        archivoNombre = resArchivo.data.nombre
+      }
+
+      const payload = {
+        texto: texto.trim(),
+        autor: { idUsuario: user.idUsuario || user.id },
+        archivoUrl,
+        archivoNombre,
+      }
+
       const res = await axiosClient.post(`/api/comentarios/ticket/${idReal}`, payload)
       setMensajes(prev => [...prev, res.data])
       setTexto('')
+      setArchivoAdjunto(null)
+      if (inputArchivoRef.current) inputArchivoRef.current.value = ''
       bajarAlFinal()
     } catch (error) {
-      console.error('Error al guardar comentario:', error)
-      setAviso('Error al enviar el mensaje.')
+      console.error('Error al guardar comentario o archivo:', error)
+      setAviso('Error al enviar el mensaje o adjunto.')
+    } finally {
+      setSubiendo(false)
     }
   }
 
@@ -218,6 +266,29 @@ function Seguimiento({ oficio, user, role }) {
             <p className="mt-4 text-sm text-slate-600 whitespace-pre-line bg-slate-50 p-4 rounded-lg border border-line">
               {oficio.descripcion}
             </p>
+
+            {evidencias.length > 0 && (
+              <div className="mt-4 border-t border-line pt-4">
+                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                  Archivos adjuntos ({evidencias.length})
+                </p>
+                <div className="mt-2.5 flex flex-wrap gap-2">
+                  {evidencias.map((ev) => (
+                    <button
+                      key={ev.idEvidencia || ev.id}
+                      type="button"
+                      onClick={() => abrirEvidencia(ev)}
+                      className="inline-flex items-center gap-2 rounded-lg border border-line bg-white px-3 py-2 text-xs font-semibold text-primary transition-colors hover:bg-primary-soft"
+                    >
+                      <FileText size={15} className="shrink-0" />
+                      <span className="max-w-[220px] truncate">
+                        {ev.nombreOriginal || ev.nombreArchivo || 'Ver archivo adjunto'}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
 
           <div className="card">
@@ -273,9 +344,50 @@ function Seguimiento({ oficio, user, role }) {
                     rows={4}
                     className="mt-4 w-full resize-y rounded-lg border border-line bg-white px-4 py-3 text-sm text-slate-800 placeholder:text-slate-400 focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
                   />
-                  <div className="mt-4 flex flex-wrap items-center justify-end gap-3">
-                    <button onClick={enviar} disabled={!texto.trim()} className="btn-primary px-6 py-2.5">
-                      Enviar Mensaje <Send size={16} />
+
+                  {archivoAdjunto && (
+                    <div className="mt-3 flex items-center justify-between rounded-lg border border-primary/25 bg-primary-soft px-3 py-2 text-xs text-primary">
+                      <span className="flex items-center gap-2 truncate font-medium">
+                        <Paperclip size={14} className="shrink-0" />
+                        <span className="truncate">{archivoAdjunto.name}</span>
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setArchivoAdjunto(null)
+                          if (inputArchivoRef.current) inputArchivoRef.current.value = ''
+                        }}
+                        className="ml-2 rounded p-0.5 hover:bg-primary/10"
+                      >
+                        <X size={14} />
+                      </button>
+                    </div>
+                  )}
+
+                  <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
+                    <div>
+                      <input
+                        ref={inputArchivoRef}
+                        type="file"
+                        hidden
+                        accept=".pdf,.png,.jpg,.jpeg,.docx"
+                        onChange={(e) => setArchivoAdjunto(e.target.files?.[0] || null)}
+                      />
+                      <button
+                        type="button"
+                        onClick={() => inputArchivoRef.current?.click()}
+                        className="inline-flex items-center gap-2 rounded-lg border border-line bg-white px-3.5 py-2 text-xs font-medium text-slate-700 transition-colors hover:bg-slate-50"
+                      >
+                        <Paperclip size={15} /> Adjuntar archivo
+                      </button>
+                    </div>
+
+                    <button
+                      onClick={enviar}
+                      disabled={subiendo || (!texto.trim() && !archivoAdjunto)}
+                      className="btn-primary px-6 py-2.5 disabled:opacity-50"
+                    >
+                      {subiendo ? 'Enviando...' : <>Enviar Mensaje <Send size={16} /></>}
                     </button>
                   </div>
                 </>
@@ -375,6 +487,16 @@ function Mensaje({ mensaje, oficio }) {
   const etiqueta = esSoporte ? (oficio.area?.nombre || 'Soporte Técnico') : 'Solicitante'
   const nombreVisible = autor.nombreCompleto || autor.nombre || 'Sistema'
 
+  const abrirArchivo = async () => {
+    try {
+      const res = await axiosClient.get(mensaje.archivoUrl, { responseType: 'blob' })
+      const blobUrl = URL.createObjectURL(res.data)
+      window.open(blobUrl, '_blank', 'noopener,noreferrer')
+    } catch (error) {
+      console.error('Error al abrir archivo:', error)
+    }
+  }
+
   return (
     <article className="flex gap-3">
       <Avatar name={nombreVisible} src={autor.foto} tone={esSoporte ? 'primary' : 'neutral'} />
@@ -392,6 +514,16 @@ function Mensaje({ mensaje, oficio }) {
         </div>
         <div className={`mt-3 rounded-lg border p-4 text-sm leading-relaxed text-slate-800 ${esSoporte ? 'border-primary/25 bg-primary-soft' : 'border-line bg-slate-50'}`}>
           {mensaje.texto && <p className="whitespace-pre-line">{mensaje.texto}</p>}
+          {mensaje.archivoUrl && (
+            <button
+              type="button"
+              onClick={abrirArchivo}
+              className={`inline-flex items-center gap-2 rounded-md border border-line bg-white px-3 py-2 text-xs font-semibold text-primary transition-colors hover:bg-slate-50 ${mensaje.texto ? 'mt-3' : ''}`}
+            >
+              <FileText size={15} className="shrink-0" />
+              <span className="truncate">{mensaje.archivoNombre || 'Ver archivo adjunto'}</span>
+            </button>
+          )}
         </div>
       </div>
     </article>
