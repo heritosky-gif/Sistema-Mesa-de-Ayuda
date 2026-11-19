@@ -18,10 +18,9 @@ import {
 } from 'lucide-react'
 import { useAuth } from '../context/AuthContext'
 import { useOficios } from '../context/oficiosContext'
-import { useInstitucion } from '../context/institucionContext'
-import { CATEGORIAS, PRIORIDADES } from '../data/mockData'
+import axiosClient from '../api/axiosClient'
+import { PRIORIDADES } from '../data/mockData'
 
-// Cambiamos 'asunto' por 'titulo' para que coincida con Spring Boot
 const FORM_INICIAL = { destino: '', categoria: '', prioridad: PRIORIDADES.MEDIA, titulo: '', descripcion: '' }
 
 const EXTENSIONES = ['pdf', 'docx', 'png', 'jpg', 'jpeg']
@@ -56,8 +55,10 @@ export default function CrearOficio() {
 function Formulario() {
   const { user, dependencia } = useAuth()
   const { crearOficio, getBorrador, guardarBorrador, descartarBorrador } = useOficios()
-  const { areas } = useInstitucion()
   const navigate = useNavigate()
+
+  const [areasReales, setAreasReales] = useState([])
+  const [categoriasReales, setCategoriasReales] = useState([])
 
   const [borradorInicial] = useState(() => getBorrador(user.idUsuario || user.id))
   const [form, setForm] = useState(() => borradorInicial?.form ?? FORM_INICIAL)
@@ -73,6 +74,17 @@ function Formulario() {
   const errores = intentado ? validar(form) : {}
   const cargando = adjuntos.some((a) => a.progreso < 100)
   const set = (campo) => (valor) => setForm((f) => ({ ...f, [campo]: valor }))
+
+  // Cargar áreas y categorías reales desde PostgreSQL
+  useEffect(() => {
+    axiosClient.get('/api/areas/todas')
+      .then((res) => setAreasReales(res.data.filter((a) => a.activo !== false)))
+      .catch((err) => console.error('Error al cargar áreas:', err))
+
+    axiosClient.get('/api/categorias/todas')
+      .then((res) => setCategoriasReales(res.data.filter((c) => c.activo !== false)))
+      .catch((err) => console.error('Error al cargar categorías:', err))
+  }, [])
 
   useEffect(() => {
     if (!cargando) return
@@ -103,7 +115,7 @@ function Formulario() {
           bytes: f.size,
           tipo: extension(f.name) === 'jpeg' ? 'jpg' : extension(f.name),
           progreso: 0,
-          archivoFisico: f // Guardamos el archivo real para el multipart
+          archivoFisico: f,
         })
     }
     setRechazados(malos)
@@ -139,27 +151,26 @@ function Formulario() {
       return
     }
     setEnviando(true)
-    
+
     try {
-      // Armamos el objeto exacto que pide Spring Boot
+      const catSeleccionada = categoriasReales.find((c) => String(c.idCategoria || c.id) === String(form.categoria))
+
       const payloadTicket = {
         titulo: form.titulo.trim(),
         descripcion: form.descripcion.trim(),
         prioridad: form.prioridad,
         solicitante: { idUsuario: user.idUsuario || user.id },
-        area: { idArea: parseInt(form.destino) }, // Ahora enviamos el ID real del área
-        // Categoria se mapeará en el context
-        categoriaString: form.categoria 
+        area: { idArea: parseInt(form.destino, 10) },
+        categoria: { idCategoria: parseInt(form.categoria, 10) },
+        categoriaString: catSeleccionada?.nombre || form.categoria,
       }
 
-      // Llamamos al context pasándole los datos y los archivos
-      const result = await crearOficio(payloadTicket, adjuntos);
+      const result = await crearOficio(payloadTicket, adjuntos)
       navigate('/oficios', { state: { creado: result } })
-      
     } catch (error) {
-      console.error("Error al crear el ticket:", error);
-      setAviso("Error al enviar el ticket. Intente de nuevo.");
-      setEnviando(false);
+      console.error('Error al crear el ticket:', error)
+      setAviso('Error al enviar el ticket. Intente de nuevo.')
+      setEnviando(false)
     }
   }
 
@@ -195,34 +206,34 @@ function Formulario() {
         </div>
       )}
 
-      <form noValidate onSubmit={(e) => { e.preventDefault(); emitir(); }} className="card mt-6 divide-y divide-line">
-        
+      <form noValidate onSubmit={(e) => { e.preventDefault(); emitir() }} className="card mt-6 divide-y divide-line">
         <Seccion icon={Building} titulo="Información General del Oficio" subtitulo="Identifique las áreas involucradas y la prioridad de atención.">
           <div className="grid gap-6 md:grid-cols-2">
             <Campo etiqueta="Dependencia / Área Emisora" htmlFor="campo-emisora">
               <div id="campo-emisora" className="flex h-14 items-center justify-between gap-3 rounded-lg border border-line bg-slate-50 px-4 text-sm text-slate-500" aria-readonly="true">
-                <span className="truncate">{dependencia?.nombre || 'Mi Área'}</span>
+                <span className="truncate">{user?.area?.nombre || dependencia?.nombre || 'Mi Área'}</span>
                 <Lock size={16} strokeWidth={1.75} className="shrink-0" />
               </div>
             </Campo>
 
-          <Campo etiqueta="Área Destinataria" htmlFor="campo-destino" error={errores.destino}>
-            <Select id="campo-destino" value={form.destino} onChange={set('destino')} invalido={!!errores.destino}>
-              <option value="">Seleccione el área destinataria</option>
-              {/* Iteramos directamente sobre las áreas reales de tu backend */}
-              {areas.map((a) => (
-                <option key={a.idArea || a.id} value={a.idArea || a.id}>
-                  {a.nombre}
-                </option>
-              ))}
-            </Select>
-          </Campo>
+            <Campo etiqueta="Área Destinataria" htmlFor="campo-destino" error={errores.destino}>
+              <Select id="campo-destino" value={form.destino} onChange={set('destino')} invalido={!!errores.destino}>
+                <option value="">Seleccione el área destinataria</option>
+                {areasReales.map((a) => (
+                  <option key={a.idArea || a.id} value={a.idArea || a.id}>
+                    {a.nombre}
+                  </option>
+                ))}
+              </Select>
+            </Campo>
 
             <Campo etiqueta="Categoría del Trámite" htmlFor="campo-categoria" error={errores.categoria}>
               <Select id="campo-categoria" value={form.categoria} onChange={set('categoria')} invalido={!!errores.categoria}>
                 <option value="">Seleccione una categoría</option>
-                {CATEGORIAS.map((c) => (
-                  <option key={c} value={c}>{c}</option>
+                {categoriasReales.map((c) => (
+                  <option key={c.idCategoria || c.id} value={c.idCategoria || c.id}>
+                    {c.nombre}
+                  </option>
                 ))}
               </Select>
             </Campo>

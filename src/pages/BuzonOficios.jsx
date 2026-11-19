@@ -33,14 +33,21 @@ import { exportCsv } from '../utils/exportCsv'
 
 const POR_PAGINA = 6
 
+const getEstado = (o) => String(o.estatus || o.estado || 'PENDIENTE').toUpperCase()
+
+const esResuelta = (o) => ['RESUELTO', 'RESUELTA', 'FINALIZADO', 'CERRADO'].includes(getEstado(o))
+
 const TABS = [
   { id: 'todas', label: 'Todas las solicitudes', match: () => true },
-  { id: 'seguimiento', label: 'En seguimiento', match: (o) => ESTADOS_EN_SEGUIMIENTO.includes(o.estatus || o.estado) },
-  { id: 'pendientes', label: 'Pendientes', match: (o) => ESTADOS_PENDIENTES.includes(o.estatus || o.estado) },
-  { id: 'resueltas', label: 'Resueltas', match: (o) => (o.estatus || o.estado) === ESTADOS_OFICIO.RESUELTA },
+  { id: 'seguimiento', label: 'En seguimiento',match: (o) => ['EN_PROCESO', 'ASIGNADO', 'EN_ATENCION'].includes(getEstado(o))},
+  { id: 'pendientes', label: 'Pendientes',match: (o) => ['PENDIENTE', 'ABIERTO', 'NUEVO', 'SIN_ASIGNAR'].includes(getEstado(o))},
+  { id: 'resueltas', label: 'Resueltas', match: esResuelta },
 ]
 
-const esResuelta = (o) => (o.estatus || o.estado) === ESTADOS_OFICIO.RESUELTA
+const nombreCategoria = (o) =>
+  typeof o.categoria === 'object'
+    ? o.categoria?.nombre || 'Sin categoría'
+    : o.categoriaString || o.categoria || 'Sin categoría'
 
 // Búsqueda sin distinguir mayúsculas ni acentos
 const normalizar = (s) =>
@@ -70,17 +77,16 @@ export default function BuzonOficios() {
   }
 
   const { oficios } = useOficios()
-  const { areas } = useInstitucion() // Ahora usamos las áreas de tu DB
+  const { areas } = useInstitucion()
   const visibles = useMemo(() => filterOficios(oficios), [filterOficios, oficios])
 
   const areasDisponibles = useMemo(() => {
     const ids = new Set(visibles.map((o) => o.area?.idArea || o.area || o.dependenciaId))
     return areas.filter((a) => ids.has(a.idArea || a.id))
   }, [visibles, areas])
-  
+
   const areaValida = areasDisponibles.some((a) => (a.idArea || a.id) == areaSeleccionada) ? areaSeleccionada : ''
 
-  // Búsqueda con las variables de PostgreSQL (titulo, idTicket)
   const filtrados = useMemo(() => {
     const q = normalizar(busqueda.trim())
     return visibles.filter((o) => {
@@ -88,9 +94,9 @@ export default function BuzonOficios() {
       if (areaValida && areaId != areaValida) return false
       if (urgencia && o.prioridad !== urgencia) return false
       if (!q) return true
-      
-      const areaObj = areas.find(a => (a.idArea || a.id) == areaId)
-      return [o.idTicket || o.folio, o.titulo || o.asunto, o.categoriaString || o.categoria, areaObj?.nombre].some((v) =>
+
+      const areaObj = areas.find((a) => (a.idArea || a.id) == areaId)
+      return [o.idTicket || o.folio, o.titulo || o.asunto, nombreCategoria(o), areaObj?.nombre].some((v) =>
         normalizar(v).includes(q)
       )
     })
@@ -103,12 +109,14 @@ export default function BuzonOficios() {
     return filtrados
       .filter(t.match)
       .sort((a, b) => {
-        const fechaA = a.fechaCreacion || a.fechaCreacion || ''
-        const fechaB = b.fechaCreacion || b.fechaCreacion || ''
-        return esResuelta(a) - esResuelta(b) ||
+        const fechaA = a.fechaCreacion || ''
+        const fechaB = b.fechaCreacion || ''
+        return (
+          esResuelta(a) - esResuelta(b) ||
           (orden === 'desc'
             ? String(fechaB).localeCompare(String(fechaA))
             : String(fechaA).localeCompare(String(fechaB)))
+        )
       })
   }, [filtrados, tab, orden])
 
@@ -132,7 +140,7 @@ export default function BuzonOficios() {
       `buzon-oficios-${FECHA_ACTUAL.toISOString().slice(0, 10)}.csv`,
       [
         { header: 'Folio', value: (o) => o.idTicket || o.folio },
-        { header: 'Categoría', value: (o) => o.categoriaString || o.categoria },
+        { header: 'Categoría', value: (o) => nombreCategoria(o) },
         { header: 'Asunto', value: (o) => o.titulo || o.asunto },
         { header: 'Área', value: (o) => o.area?.nombre || 'Sin Área' },
         { header: 'Recibida', value: (o) => `${formatFechaCorta(o.fechaCreacion)} ${formatHora12(o.fechaCreacion)}` },
@@ -292,9 +300,8 @@ export default function BuzonOficios() {
             </thead>
             <tbody className="divide-y divide-line">
               {paginaItems.map((o) => {
-                // AQUÍ CORREGIMOS EL ERROR DE LA LLAVE ÚNICA USANDO EL ID DEL TICKET
                 const uniqueKey = o.idTicket || o.id || Math.random()
-                
+
                 return (
                   <tr key={uniqueKey} className="transition-colors hover:bg-slate-50/60">
                     <td className="px-6 py-5">
@@ -308,7 +315,7 @@ export default function BuzonOficios() {
                       )}
                     </td>
                     <td className="px-6 py-5">
-                      <p className="text-[11px] text-slate-500">{o.categoriaString || o.categoria}</p>
+                      <p className="text-[11px] text-slate-500">{nombreCategoria(o)}</p>
                       <p className="mt-1 text-sm font-semibold text-slate-900">{o.titulo || o.asunto}</p>
                     </td>
                     <td className="px-6 py-5">
