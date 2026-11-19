@@ -10,6 +10,7 @@ import {
   Send,
   ShieldLock,
   FileText,
+  UserCheck,
 } from 'lucide-react'
 import { useAuth } from '../context/AuthContext'
 import { useOficios } from '../context/oficiosContext'
@@ -24,14 +25,12 @@ const ESTADO_TONOS = {
   RESUELTO: 'bg-emerald-50 text-emerald-700',
 }
 
-// 🛡️ TRADUCTOR DE FECHAS SPRING BOOT -> REACT
 const normalizarFecha = (fecha) => {
   if (!fecha) return new Date().toISOString()
   if (typeof fecha === 'string') return fecha
   if (Array.isArray(fecha)) {
-    // Si Spring manda [YYYY, MM, DD, HH, mm, ss]
-    const [y, M, d, h=0, mnt=0, s=0] = fecha
-    return new Date(y, M-1, d, h, mnt, s).toISOString()
+    const [y, M, d, h = 0, mnt = 0, s = 0] = fecha
+    return new Date(y, M - 1, d, h, mnt, s).toISOString()
   }
   return new Date().toISOString()
 }
@@ -40,7 +39,7 @@ export default function SeguimientoTicket() {
   const { id } = useParams()
   const { user, role, filterOficios } = useAuth()
   const { oficios, getOficio } = useOficios()
-  
+
   const oficio = getOficio(Number(id) || id)
   const puedeVer = useMemo(() => filterOficios(oficios).some((o) => (o.idTicket || o.id) == id), [filterOficios, oficios, id])
 
@@ -62,7 +61,23 @@ function Seguimiento({ oficio, user, role }) {
   const [texto, setTexto] = useState('')
   const [confirmar, setConfirmar] = useState(false)
   const [aviso, setAviso] = useState(null)
+
+  const [tecnicos, setTecnicos] = useState([])
+  const [tecnicoSeleccionado, setTecnicoSeleccionado] = useState(
+    oficio.tecnico?.idUsuario || oficio.tecnicoAsignado?.idUsuario || ''
+  )
+  const [tecnicoActual, setTecnicoActual] = useState(
+    oficio.tecnico || oficio.tecnicoAsignado || null
+  )
+  const [asignando, setAsignando] = useState(false)
+
   const finConversacion = useRef(null)
+
+  const [estado, setEstado] = useState((oficio.estatus || oficio.estado || 'PENDIENTE').toUpperCase())
+  const resuelta = estado === 'RESUELTO' || estado === 'FINALIZADO'
+  const puedeFinalizar = role === 'ADMIN' || role === 'TECNICO'
+  const puedeAsignar = role === 'ADMIN' || role === 'INTERMEDIARIO'
+  const areaResponsable = oficio.area?.nombre || 'Soporte Técnico'
 
   useEffect(() => {
     axiosClient.get(`/api/comentarios/ticket/${idReal}`)
@@ -70,8 +85,20 @@ function Seguimiento({ oficio, user, role }) {
         setMensajes(res.data)
         bajarAlFinal()
       })
-      .catch(err => console.error("Error al cargar comentarios:", err))
+      .catch(err => console.error('Error al cargar comentarios:', err))
   }, [idReal])
+
+  useEffect(() => {
+    if (!puedeAsignar) return
+    axiosClient.get('/api/usuarios/todos')
+      .then(res => {
+        const soloTecnicos = res.data.filter(
+          (u) => String(u.rol).toUpperCase() === 'TECNICO' && u.activo !== false
+        )
+        setTecnicos(soloTecnicos)
+      })
+      .catch(err => console.error('Error al cargar técnicos:', err))
+  }, [puedeAsignar])
 
   useEffect(() => {
     if (!aviso) return
@@ -79,17 +106,11 @@ function Seguimiento({ oficio, user, role }) {
     return () => clearTimeout(t)
   }, [aviso])
 
-  const estado = (oficio.estatus || oficio.estado || 'PENDIENTE').toUpperCase()
-  const resuelta = estado === 'RESUELTO' || estado === 'FINALIZADO'
-  const puedeFinalizar = role === 'ADMIN' || role === 'TECNICO'
-  const areaResponsable = oficio.area?.nombre || 'Soporte Técnico'
-
-  // Agrupar mensajes por día usando la fecha segura
   const grupos = mensajes.reduce((acc, m) => {
     const fechaSegura = normalizarFecha(m.fechaCreacion || m.fecha)
     const dia = fechaSegura.slice(0, 10)
-    const msgNorm = { ...m, fechaSegura } // Inyectamos la fecha arreglada al mensaje
-    
+    const msgNorm = { ...m, fechaSegura }
+
     const ultimo = acc.at(-1)
     if (ultimo?.dia === dia) ultimo.items.push(msgNorm)
     else acc.push({ dia, items: [msgNorm] })
@@ -99,9 +120,28 @@ function Seguimiento({ oficio, user, role }) {
   const bajarAlFinal = () =>
     requestAnimationFrame(() => finConversacion.current?.scrollIntoView({ behavior: 'smooth', block: 'end' }))
 
+  const asignarTecnico = async () => {
+    if (!tecnicoSeleccionado) return
+    setAsignando(true)
+    try {
+      const res = await axiosClient.put(`/api/tickets/${idReal}/asignar/${tecnicoSeleccionado}`)
+      const nuevoTec =
+        res.data?.tecnico ||
+        res.data?.tecnicoAsignado ||
+        tecnicos.find((t) => String(t.idUsuario) === String(tecnicoSeleccionado))
+      setTecnicoActual(nuevoTec)
+      setAviso(`Ticket asignado a ${nuevoTec?.nombreCompleto || 'técnico'}.`)
+    } catch (error) {
+      console.error('Error al asignar técnico:', error)
+      setAviso('No se pudo asignar el técnico. Revisa los permisos o la consola.')
+    } finally {
+      setAsignando(false)
+    }
+  }
+
   const enviar = async () => {
     if (!texto.trim()) return
-    
+
     const payload = {
       texto: texto.trim(),
       autor: { idUsuario: user.idUsuario || user.id }
@@ -113,27 +153,35 @@ function Seguimiento({ oficio, user, role }) {
       setTexto('')
       bajarAlFinal()
     } catch (error) {
-      console.error("Error al guardar comentario:", error)
+      console.error('Error al guardar comentario:', error)
       setAviso('Error al enviar el mensaje.')
     }
   }
 
   const finalizar = async () => {
+    const comentarioCierre = 'Ticket finalizado. Se da por concluida la atención de este oficio.'
     try {
+      await axiosClient.put(`/api/tickets/${idReal}/estado`, null, {
+        params: {
+          nuevoEstado: 'RESUELTO',
+          comentario: comentarioCierre,
+          idUsuario: user.idUsuario || user.id,
+        },
+      })
       const payload = {
-        texto: 'Ticket finalizado. Se da por concluida la atención de este oficio.',
+        texto: comentarioCierre,
         autor: { idUsuario: user.idUsuario || user.id }
       }
       const res = await axiosClient.post(`/api/comentarios/ticket/${idReal}`, payload)
       setMensajes(prev => [...prev, res.data])
-      
+      setEstado('RESUELTO')
       if (typeof finalizarOficio === 'function') finalizarOficio(idReal)
-      
       bajarAlFinal()
       setConfirmar(false)
       setAviso('El ticket se marcó como resuelto.')
     } catch (error) {
-      console.error(error)
+      console.error('Error al finalizar ticket:', error)
+      setAviso('No se pudo finalizar el ticket. Revisa la consola.')
     }
   }
 
@@ -247,11 +295,48 @@ function Seguimiento({ oficio, user, role }) {
             <dl className="space-y-6 px-6 py-6">
               <Detalle icon={Building} etiqueta="Solicitante" valor={oficio.solicitante?.nombreCompleto || 'Usuario'} />
               <Detalle icon={Building} etiqueta="Área Asignada" valor={areaResponsable} />
+              <Detalle
+                icon={UserCheck}
+                etiqueta="Técnico Asignado"
+                valor={tecnicoActual?.nombreCompleto || 'Sin asignar'}
+              />
               <div className="border-t border-line pt-6">
                 <Detalle icon={CalendarDays} etiqueta="Fecha de Creación" valor={formatFechaSlash(normalizarFecha(oficio.fechaCreacion))} />
               </div>
             </dl>
           </div>
+
+          {!resuelta && puedeAsignar && (
+            <div className="card p-6">
+              <div className="flex items-center gap-2.5">
+                <UserCheck size={18} strokeWidth={1.75} className="text-primary" />
+                <h3 className="text-sm font-semibold text-slate-900">Asignar Técnico</h3>
+              </div>
+              <p className="mt-1 text-xs text-slate-500">
+                Seleccione al técnico responsable de atender este oficio.
+              </p>
+              <select
+                value={tecnicoSeleccionado}
+                onChange={(e) => setTecnicoSeleccionado(e.target.value)}
+                className="mt-4 h-11 w-full rounded-lg border border-line bg-white px-3 text-sm text-slate-800 focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
+              >
+                <option value="">Seleccione un técnico...</option>
+                {tecnicos.map((t) => (
+                  <option key={t.idUsuario} value={t.idUsuario}>
+                    {t.nombreCompleto} {t.area?.nombre ? `(${t.area.nombre})` : ''}
+                  </option>
+                ))}
+              </select>
+              <button
+                type="button"
+                onClick={asignarTecnico}
+                disabled={asignando || !tecnicoSeleccionado}
+                className="btn-primary mt-3 w-full py-2.5 text-sm disabled:opacity-50"
+              >
+                {asignando ? 'Asignando...' : tecnicoActual ? 'Reasignar Técnico' : 'Asignar Técnico'}
+              </button>
+            </div>
+          )}
 
           {resuelta ? (
             <div role="status" className="flex w-full items-center gap-3 rounded-card border border-emerald-200 bg-emerald-50 px-5 py-5 text-sm font-semibold text-emerald-700">
@@ -285,7 +370,7 @@ function Seguimiento({ oficio, user, role }) {
 
 function Mensaje({ mensaje, oficio }) {
   const autor = mensaje.autor || {}
-  
+
   const esSoporte = autor.idUsuario !== oficio.solicitante?.idUsuario
   const etiqueta = esSoporte ? (oficio.area?.nombre || 'Soporte Técnico') : 'Solicitante'
   const nombreVisible = autor.nombreCompleto || autor.nombre || 'Sistema'
@@ -301,7 +386,6 @@ function Mensaje({ mensaje, oficio }) {
               {etiqueta}
             </span>
           </div>
-          {/* Usamos la fechaSegura que inyectamos al agrupar */}
           <time className="text-[11px] text-slate-500" dateTime={mensaje.fechaSegura}>
             {formatFechaMensaje(mensaje.fechaSegura)}
           </time>
