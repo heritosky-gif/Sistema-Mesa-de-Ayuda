@@ -89,39 +89,34 @@ export function AuthProvider({ children }) {
     return !!role && PERMISSIONS[role]?.includes(permission);
   }, [role]);
 
-  const filterOficios = useCallback((lista) => {
-    if (!user || !lista) return [];
+  const filterOficios = useCallback((lista = []) => {
+  if (!user) return []
+  const rolActual = String(user.rol || role || '').toUpperCase()
+  const miId = user.idUsuario || user.id
 
-    const rolUsuario = String(user.rol || '').toUpperCase();
+  // Admin e Intermediario ven todos los tickets para poder gestionar y asignar
+  if (rolActual === 'ADMIN' || rolActual === 'INTERMEDIARIO') {
+    return lista
+  }
 
-    const miId = user.idUsuario || user.id;
+  // El Técnico SOLO ve los tickets que le fueron asignados explícitamente
+  if (rolActual === 'TECNICO') {
+    return lista.filter((o) => {
+      const idTec = o.tecnico?.idUsuario || o.tecnicoAsignado?.idUsuario
+      return idTec && String(idTec) === String(miId)
+    })
+  }
 
-    if (rolUsuario === 'ADMIN' || rolUsuario === 'INTERMEDIARIO') {
-      return lista;
-    }
+  // El Solicitante SOLO ve los tickets que él mismo creó
+  if (rolActual === 'SOLICITANTE') {
+    return lista.filter((o) => {
+      const idSol = o.solicitante?.idUsuario || o.solicitanteId
+      return idSol && String(idSol) === String(miId)
+    })
+  }
 
-    if (rolUsuario === 'TECNICO') {
-      // Solo ve los tickets de su área
-      const miAreaId = user.area?.idArea || user.area?.id;
-      return lista.filter(o => {
-        const ticketAreaId = o.area?.idArea || o.area?.id || o.dependenciaId;
-        return ticketAreaId == miAreaId; 
-      });
-    }
-
-    if (rolUsuario === 'SOLICITANTE') {
-      // SOLO ve los tickets donde él es el creador
-      return lista.filter(o => {
-        const idCreador = o.solicitante?.idUsuario || 
-                          o.solicitante?.id || 
-                          o.usuario?.idUsuario || 
-                          o.creadoPorId || 
-                          o.idUsuario;          
-        return idCreador == miId;
-      });
-    }
-    return [];
-  }, [user]);
+    return []
+}, [user, role])
 
   const filterUsuarios = useCallback((lista) => {
       if (!user) return []

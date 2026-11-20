@@ -8,6 +8,7 @@ import {
   Lock,
   MessagesSquare,
   Paperclip,
+  PlayCircle,
   Send,
   ShieldLock,
   FileText,
@@ -64,6 +65,7 @@ function Seguimiento({ oficio, user, role }) {
   const [texto, setTexto] = useState('')
   const [archivoAdjunto, setArchivoAdjunto] = useState(null)
   const [subiendo, setSubiendo] = useState(false)
+  const [iniciando, setIniciando] = useState(false)
   const [confirmar, setConfirmar] = useState(false)
   const [aviso, setAviso] = useState(null)
 
@@ -81,6 +83,7 @@ function Seguimiento({ oficio, user, role }) {
 
   const [estado, setEstado] = useState((oficio.estatus || oficio.estado || 'PENDIENTE').toUpperCase())
   const resuelta = estado === 'RESUELTO' || estado === 'FINALIZADO'
+  const esPendiente = ['PENDIENTE', 'ABIERTO', 'NUEVO', 'SIN_ASIGNAR'].includes(estado)
   const puedeFinalizar = role === 'ADMIN' || role === 'TECNICO'
   const puedeAsignar = role === 'ADMIN' || role === 'INTERMEDIARIO'
   const areaResponsable = oficio.area?.nombre || 'Soporte Técnico'
@@ -102,15 +105,21 @@ function Seguimiento({ oficio, user, role }) {
 
   useEffect(() => {
     if (!puedeAsignar) return
+    const areaTicketId = oficio.area?.idArea || oficio.area?.id
+
     axiosClient.get('/api/usuarios/todos')
-      .then(res => {
-        const soloTecnicos = res.data.filter(
-          (u) => String(u.rol).toUpperCase() === 'TECNICO' && u.activo !== false
-        )
-        setTecnicos(soloTecnicos)
+      .then((res) => {
+        const tecnicosDelArea = res.data.filter((u) => {
+          const esTecnico = String(u.rol).toUpperCase() === 'TECNICO' && u.activo !== false
+          if (!esTecnico) return false
+          if (!areaTicketId) return true
+          const areaTecId = u.area?.idArea || u.area?.id
+          return String(areaTecId) === String(areaTicketId)
+        })
+        setTecnicos(tecnicosDelArea)
       })
-      .catch(err => console.error('Error al cargar técnicos:', err))
-  }, [puedeAsignar])
+      .catch((err) => console.error('Error al cargar técnicos:', err))
+  }, [puedeAsignar, oficio.area])
 
   useEffect(() => {
     if (!aviso) return
@@ -118,10 +127,35 @@ function Seguimiento({ oficio, user, role }) {
     return () => clearTimeout(t)
   }, [aviso])
 
+  const mapaAutores = useMemo(() => {
+    const mapa = {}
+    const registrar = (u) => {
+      if (u && typeof u === 'object' && (u.idUsuario || u.id) && (u.nombreCompleto || u.nombre)) {
+        mapa[String(u.idUsuario || u.id)] = u
+      }
+    }
+
+    registrar(user)
+    registrar(oficio.solicitante)
+    registrar(oficio.tecnico)
+    registrar(oficio.tecnicoAsignado)
+    registrar(tecnicoActual)
+    mensajes.forEach((m) => registrar(m.autor))
+
+    return mapa
+  }, [mensajes, oficio, user, tecnicoActual])
+
   const grupos = mensajes.reduce((acc, m) => {
     const fechaSegura = normalizarFecha(m.fechaCreacion || m.fecha)
     const dia = fechaSegura.slice(0, 10)
-    const msgNorm = { ...m, fechaSegura }
+
+    const autorId = typeof m.autor === 'object' ? (m.autor?.idUsuario || m.autor?.id) : m.autor
+    const autorResuelto =
+      (typeof m.autor === 'object' && (m.autor?.nombreCompleto || m.autor?.nombre) && m.autor) ||
+      mapaAutores[String(autorId)] ||
+      (typeof m.autor === 'object' ? m.autor : { idUsuario: autorId })
+
+    const msgNorm = { ...m, fechaSegura, autor: autorResuelto }
 
     const ultimo = acc.at(-1)
     if (ultimo?.dia === dia) ultimo.items.push(msgNorm)
@@ -193,7 +227,11 @@ function Seguimiento({ oficio, user, role }) {
       }
 
       const res = await axiosClient.post(`/api/comentarios/ticket/${idReal}`, payload)
-      setMensajes(prev => [...prev, res.data])
+      const nuevoMensaje = {
+        ...res.data,
+        autor: res.data?.autor?.nombreCompleto ? res.data.autor : user,
+      }
+      setMensajes(prev => [...prev, nuevoMensaje])
       setTexto('')
       setArchivoAdjunto(null)
       if (inputArchivoRef.current) inputArchivoRef.current.value = ''
@@ -203,6 +241,40 @@ function Seguimiento({ oficio, user, role }) {
       setAviso('Error al enviar el mensaje o adjunto.')
     } finally {
       setSubiendo(false)
+    }
+  }
+
+  const iniciarSeguimiento = async () => {
+    const comentarioInicio = 'El técnico ha iniciado el seguimiento y atención de este oficio.'
+    setIniciando(true)
+    try {
+      await axiosClient.put(`/api/tickets/${idReal}/estado`, null, {
+        params: {
+          nuevoEstado: 'EN_PROCESO',
+          comentario: comentarioInicio,
+          idUsuario: user.idUsuario || user.id,
+        },
+      })
+
+      const payload = {
+        texto: comentarioInicio,
+        autor: { idUsuario: user.idUsuario || user.id },
+      }
+      const res = await axiosClient.post(`/api/comentarios/ticket/${idReal}`, payload)
+      const nuevoMensaje = {
+        ...res.data,
+        autor: res.data?.autor?.nombreCompleto ? res.data.autor : user,
+      }
+
+      setMensajes((prev) => [...prev, nuevoMensaje])
+      setEstado('EN_PROCESO')
+      bajarAlFinal()
+      setAviso('El ticket ahora está en seguimiento.')
+    } catch (error) {
+      console.error('Error al iniciar seguimiento:', error)
+      setAviso('No se pudo cambiar el estado a En Seguimiento.')
+    } finally {
+      setIniciando(false)
     }
   }
 
@@ -221,7 +293,11 @@ function Seguimiento({ oficio, user, role }) {
         autor: { idUsuario: user.idUsuario || user.id }
       }
       const res = await axiosClient.post(`/api/comentarios/ticket/${idReal}`, payload)
-      setMensajes(prev => [...prev, res.data])
+      const nuevoMensaje = {
+        ...res.data,
+        autor: res.data?.autor?.nombreCompleto ? res.data.autor : user,
+      }
+      setMensajes(prev => [...prev, nuevoMensaje])
       setEstado('RESUELTO')
       if (typeof finalizarOficio === 'function') finalizarOficio(idReal)
       bajarAlFinal()
@@ -323,7 +399,6 @@ function Seguimiento({ oficio, user, role }) {
               <div ref={finConversacion} />
             </div>
 
-            {/* Caja de respuesta */}
             <div className="mx-6 border-t border-line px-0 pb-8 pt-6 sm:px-6">
               {resuelta ? (
                 <p role="status" className="flex items-center gap-2.5 rounded-lg border border-line bg-slate-50 px-4 py-3 text-sm text-slate-500">
@@ -396,7 +471,6 @@ function Seguimiento({ oficio, user, role }) {
           </div>
         </div>
 
-        {/* Columna lateral */}
         <aside className="space-y-6 lg:sticky lg:top-24">
           <h2 className="text-base font-semibold text-slate-900">Ficha Técnica</h2>
           <div className="card -mt-1">
@@ -432,7 +506,11 @@ function Seguimiento({ oficio, user, role }) {
                 onChange={(e) => setTecnicoSeleccionado(e.target.value)}
                 className="mt-4 h-11 w-full rounded-lg border border-line bg-white px-3 text-sm text-slate-800 focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
               >
-                <option value="">Seleccione un técnico...</option>
+                <option value="">
+                  {tecnicos.length === 0
+                    ? `No hay técnicos en ${areaResponsable}`
+                    : 'Seleccione un técnico...'}
+                </option>
                 {tecnicos.map((t) => (
                   <option key={t.idUsuario} value={t.idUsuario}>
                     {t.nombreCompleto} {t.area?.nombre ? `(${t.area.nombre})` : ''}
@@ -456,9 +534,27 @@ function Seguimiento({ oficio, user, role }) {
             </div>
           ) : (
             puedeFinalizar && (
-              <button onClick={() => setConfirmar(true)} className="flex w-full items-center gap-3 rounded-card border border-primary bg-white px-5 py-5 text-left text-sm font-semibold text-primary transition-colors hover:bg-primary-soft">
-                <CircleCheck size={20} strokeWidth={1.75} /> Finalizar Ticket
-              </button>
+              <div className="space-y-3">
+                {esPendiente && (
+                  <button
+                    type="button"
+                    onClick={iniciarSeguimiento}
+                    disabled={iniciando}
+                    className="flex w-full items-center gap-3 rounded-card border border-amber-300 bg-amber-50 px-5 py-4 text-left text-sm font-semibold text-amber-800 transition-colors hover:bg-amber-100 disabled:opacity-50"
+                  >
+                    <PlayCircle size={20} strokeWidth={1.75} />
+                    {iniciando ? 'Actualizando...' : 'Iniciar Seguimiento'}
+                  </button>
+                )}
+
+                <button
+                  type="button"
+                  onClick={() => setConfirmar(true)}
+                  className="flex w-full items-center gap-3 rounded-card border border-primary bg-white px-5 py-4 text-left text-sm font-semibold text-primary transition-colors hover:bg-primary-soft"
+                >
+                  <CircleCheck size={20} strokeWidth={1.75} /> Finalizar Ticket
+                </button>
+              </div>
             )
           )}
         </aside>
