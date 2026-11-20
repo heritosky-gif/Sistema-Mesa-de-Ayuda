@@ -29,13 +29,14 @@ const ESTADO_TONOS = {
 }
 
 const normalizarFecha = (fecha) => {
-  if (!fecha) return new Date().toISOString()
+  if (!fecha) return null
   if (typeof fecha === 'string') return fecha
+  if (typeof fecha === 'number') return new Date(fecha).toISOString()
   if (Array.isArray(fecha)) {
     const [y, M, d, h = 0, mnt = 0, s = 0] = fecha
     return new Date(y, M - 1, d, h, mnt, s).toISOString()
   }
-  return new Date().toISOString()
+  return null
 }
 
 export default function SeguimientoTicket() {
@@ -69,7 +70,13 @@ function Seguimiento({ oficio, user, role }) {
   const [confirmar, setConfirmar] = useState(false)
   const [aviso, setAviso] = useState(null)
 
-  const [tecnicos, setTecnicos] = useState([])
+  const [areas, setAreas] = useState([])
+  const [areaSeleccionada, setAreaSeleccionada] = useState(
+    oficio.area?.idArea || oficio.area?.id || ''
+  )
+  const [areaActual, setAreaActual] = useState(oficio.area || null)
+
+  const [todosTecnicos, setTodosTecnicos] = useState([])
   const [tecnicoSeleccionado, setTecnicoSeleccionado] = useState(
     oficio.tecnico?.idUsuario || oficio.tecnicoAsignado?.idUsuario || ''
   )
@@ -86,7 +93,14 @@ function Seguimiento({ oficio, user, role }) {
   const esPendiente = ['PENDIENTE', 'ABIERTO', 'NUEVO', 'SIN_ASIGNAR'].includes(estado)
   const puedeFinalizar = role === 'ADMIN' || role === 'TECNICO'
   const puedeAsignar = role === 'ADMIN' || role === 'INTERMEDIARIO'
-  const areaResponsable = oficio.area?.nombre || 'Soporte Técnico'
+  const areaResponsable = areaActual?.nombre || 'Por asignar'
+
+  const nombreSolicitante =
+    oficio.solicitante?.nombreCompleto ||
+    oficio.solicitante?.nombre ||
+    (String(oficio.solicitante?.idUsuario) === String(user.idUsuario || user.id)
+      ? (user.nombreCompleto || user.nombre)
+      : 'Usuario')
 
   useEffect(() => {
     axiosClient.get(`/api/comentarios/ticket/${idReal}`)
@@ -105,21 +119,28 @@ function Seguimiento({ oficio, user, role }) {
 
   useEffect(() => {
     if (!puedeAsignar) return
-    const areaTicketId = oficio.area?.idArea || oficio.area?.id
+
+    axiosClient.get('/api/areas/todas')
+      .then((res) => setAreas(res.data.filter((a) => a.activo !== false)))
+      .catch((err) => console.error('Error al cargar áreas:', err))
 
     axiosClient.get('/api/usuarios/todos')
       .then((res) => {
-        const tecnicosDelArea = res.data.filter((u) => {
-          const esTecnico = String(u.rol).toUpperCase() === 'TECNICO' && u.activo !== false
-          if (!esTecnico) return false
-          if (!areaTicketId) return true
-          const areaTecId = u.area?.idArea || u.area?.id
-          return String(areaTecId) === String(areaTicketId)
-        })
-        setTecnicos(tecnicosDelArea)
+        const soloTecnicos = res.data.filter(
+          (u) => String(u.rol).toUpperCase() === 'TECNICO' && u.activo !== false
+        )
+        setTodosTecnicos(soloTecnicos)
       })
       .catch((err) => console.error('Error al cargar técnicos:', err))
-  }, [puedeAsignar, oficio.area])
+  }, [puedeAsignar])
+
+  const tecnicosFiltrados = useMemo(() => {
+    if (!areaSeleccionada) return []
+    return todosTecnicos.filter((u) => {
+      const areaTecId = u.area?.idArea || u.area?.id
+      return String(areaTecId) === String(areaSeleccionada)
+    })
+  }, [todosTecnicos, areaSeleccionada])
 
   useEffect(() => {
     if (!aviso) return
@@ -146,8 +167,9 @@ function Seguimiento({ oficio, user, role }) {
   }, [mensajes, oficio, user, tecnicoActual])
 
   const grupos = mensajes.reduce((acc, m) => {
-    const fechaSegura = normalizarFecha(m.fechaCreacion || m.fecha)
-    const dia = fechaSegura.slice(0, 10)
+    const fechaRaw = m.fechaCreacion || m.fecha_creacion || m.fecha || m.createdAt
+    const fechaSegura = normalizarFecha(fechaRaw)
+    const dia = fechaSegura ? fechaSegura.slice(0, 10) : 'sin-fecha'
 
     const autorId = typeof m.autor === 'object' ? (m.autor?.idUsuario || m.autor?.id) : m.autor
     const autorResuelto =
@@ -190,8 +212,14 @@ function Seguimiento({ oficio, user, role }) {
       const nuevoTec =
         res.data?.tecnico ||
         res.data?.tecnicoAsignado ||
-        tecnicos.find((t) => String(t.idUsuario) === String(tecnicoSeleccionado))
+        todosTecnicos.find((t) => String(t.idUsuario) === String(tecnicoSeleccionado))
+      const nuevaArea =
+        res.data?.area ||
+        nuevoTec?.area ||
+        areas.find((a) => String(a.idArea || a.id) === String(areaSeleccionada))
+
       setTecnicoActual(nuevoTec)
+      if (nuevaArea) setAreaActual(nuevaArea)
       setAviso(`Ticket asignado a ${nuevoTec?.nombreCompleto || 'técnico'}.`)
     } catch (error) {
       console.error('Error al asignar técnico:', error)
@@ -229,6 +257,7 @@ function Seguimiento({ oficio, user, role }) {
       const res = await axiosClient.post(`/api/comentarios/ticket/${idReal}`, payload)
       const nuevoMensaje = {
         ...res.data,
+        fechaCreacion: res.data?.fechaCreacion || new Date().toISOString(),
         autor: res.data?.autor?.nombreCompleto ? res.data.autor : user,
       }
       setMensajes(prev => [...prev, nuevoMensaje])
@@ -263,6 +292,7 @@ function Seguimiento({ oficio, user, role }) {
       const res = await axiosClient.post(`/api/comentarios/ticket/${idReal}`, payload)
       const nuevoMensaje = {
         ...res.data,
+        fechaCreacion: res.data?.fechaCreacion || new Date().toISOString(),
         autor: res.data?.autor?.nombreCompleto ? res.data.autor : user,
       }
 
@@ -295,6 +325,7 @@ function Seguimiento({ oficio, user, role }) {
       const res = await axiosClient.post(`/api/comentarios/ticket/${idReal}`, payload)
       const nuevoMensaje = {
         ...res.data,
+        fechaCreacion: res.data?.fechaCreacion || new Date().toISOString(),
         autor: res.data?.autor?.nombreCompleto ? res.data.autor : user,
       }
       setMensajes(prev => [...prev, nuevoMensaje])
@@ -308,6 +339,8 @@ function Seguimiento({ oficio, user, role }) {
       setAviso('No se pudo finalizar el ticket. Revisa la consola.')
     }
   }
+
+  const fechaCreacionTicket = normalizarFecha(oficio.fechaCreacion)
 
   return (
     <>
@@ -386,12 +419,14 @@ function Seguimiento({ oficio, user, role }) {
                 <section key={g.dia}>
                   <div className="flex items-center gap-4 py-5" role="separator">
                     <span className="h-px flex-1 bg-line" />
-                    <span className="text-[11px] text-slate-500">{formatFechaLarga(`${g.dia}T00:00:00`)}</span>
+                    <span className="text-[11px] text-slate-500">
+                      {g.dia === 'sin-fecha' ? 'Sin fecha registrada' : formatFechaLarga(`${g.dia}T00:00:00`)}
+                    </span>
                     <span className="h-px flex-1 bg-line" />
                   </div>
                   <div className="space-y-7">
                     {g.items.map((m) => (
-                      <Mensaje key={m.idComentario || m.id || Math.random()} mensaje={m} oficio={oficio} />
+                      <Mensaje key={m.idComentario || m.id || Math.random()} mensaje={m} oficio={oficio} areaActual={areaActual} />
                     ))}
                   </div>
                 </section>
@@ -479,7 +514,7 @@ function Seguimiento({ oficio, user, role }) {
               <h3 className="text-sm font-semibold text-slate-900">Detalles del Registro</h3>
             </div>
             <dl className="space-y-6 px-6 py-6">
-              <Detalle icon={Building} etiqueta="Solicitante" valor={oficio.solicitante?.nombreCompleto || 'Usuario'} />
+              <Detalle icon={Building} etiqueta="Solicitante" valor={nombreSolicitante} />
               <Detalle icon={Building} etiqueta="Área Asignada" valor={areaResponsable} />
               <Detalle
                 icon={UserCheck}
@@ -487,7 +522,11 @@ function Seguimiento({ oficio, user, role }) {
                 valor={tecnicoActual?.nombreCompleto || 'Sin asignar'}
               />
               <div className="border-t border-line pt-6">
-                <Detalle icon={CalendarDays} etiqueta="Fecha de Creación" valor={formatFechaSlash(normalizarFecha(oficio.fechaCreacion))} />
+                <Detalle
+                  icon={CalendarDays}
+                  etiqueta="Fecha de Creación"
+                  valor={fechaCreacionTicket ? formatFechaSlash(fechaCreacionTicket) : 'Sin fecha'}
+                />
               </div>
             </dl>
           </div>
@@ -496,32 +535,55 @@ function Seguimiento({ oficio, user, role }) {
             <div className="card p-6">
               <div className="flex items-center gap-2.5">
                 <UserCheck size={18} strokeWidth={1.75} className="text-primary" />
-                <h3 className="text-sm font-semibold text-slate-900">Asignar Técnico</h3>
+                <h3 className="text-sm font-semibold text-slate-900">Asignar Área y Técnico</h3>
               </div>
               <p className="mt-1 text-xs text-slate-500">
-                Seleccione al técnico responsable de atender este oficio.
+                Elija el área destinataria y al técnico responsable de atender este oficio.
               </p>
+
+              <label className="mt-4 block text-xs font-medium text-slate-600">Área</label>
               <select
-                value={tecnicoSeleccionado}
-                onChange={(e) => setTecnicoSeleccionado(e.target.value)}
-                className="mt-4 h-11 w-full rounded-lg border border-line bg-white px-3 text-sm text-slate-800 focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
+                value={areaSeleccionada}
+                onChange={(e) => {
+                  setAreaSeleccionada(e.target.value)
+                  setTecnicoSeleccionado('')
+                }}
+                className="mt-1.5 h-11 w-full rounded-lg border border-line bg-white px-3 text-sm text-slate-800 focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
               >
-                <option value="">
-                  {tecnicos.length === 0
-                    ? `No hay técnicos en ${areaResponsable}`
-                    : 'Seleccione un técnico...'}
-                </option>
-                {tecnicos.map((t) => (
-                  <option key={t.idUsuario} value={t.idUsuario}>
-                    {t.nombreCompleto} {t.area?.nombre ? `(${t.area.nombre})` : ''}
+                <option value="">Seleccione un área...</option>
+                {areas.map((a) => (
+                  <option key={a.idArea || a.id} value={a.idArea || a.id}>
+                    {a.nombre}
                   </option>
                 ))}
               </select>
+
+              <label className="mt-3 block text-xs font-medium text-slate-600">Técnico</label>
+              <select
+                value={tecnicoSeleccionado}
+                onChange={(e) => setTecnicoSeleccionado(e.target.value)}
+                disabled={!areaSeleccionada}
+                className="mt-1.5 h-11 w-full rounded-lg border border-line bg-white px-3 text-sm text-slate-800 focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20 disabled:bg-slate-50 disabled:text-slate-400"
+              >
+                <option value="">
+                  {!areaSeleccionada
+                    ? 'Primero seleccione un área...'
+                    : tecnicosFiltrados.length === 0
+                      ? 'No hay técnicos en esta área'
+                      : 'Seleccione un técnico...'}
+                </option>
+                {tecnicosFiltrados.map((t) => (
+                  <option key={t.idUsuario} value={t.idUsuario}>
+                    {t.nombreCompleto}
+                  </option>
+                ))}
+              </select>
+
               <button
                 type="button"
                 onClick={asignarTecnico}
                 disabled={asignando || !tecnicoSeleccionado}
-                className="btn-primary mt-3 w-full py-2.5 text-sm disabled:opacity-50"
+                className="btn-primary mt-4 w-full py-2.5 text-sm disabled:opacity-50"
               >
                 {asignando ? 'Asignando...' : tecnicoActual ? 'Reasignar Técnico' : 'Asignar Técnico'}
               </button>
@@ -576,11 +638,11 @@ function Seguimiento({ oficio, user, role }) {
   )
 }
 
-function Mensaje({ mensaje, oficio }) {
+function Mensaje({ mensaje, oficio, areaActual }) {
   const autor = mensaje.autor || {}
 
   const esSoporte = autor.idUsuario !== oficio.solicitante?.idUsuario
-  const etiqueta = esSoporte ? (oficio.area?.nombre || 'Soporte Técnico') : 'Solicitante'
+  const etiqueta = esSoporte ? (areaActual?.nombre || oficio.area?.nombre || 'Soporte Técnico') : 'Solicitante'
   const nombreVisible = autor.nombreCompleto || autor.nombre || 'Sistema'
 
   const abrirArchivo = async () => {
@@ -604,8 +666,8 @@ function Mensaje({ mensaje, oficio }) {
               {etiqueta}
             </span>
           </div>
-          <time className="text-[11px] text-slate-500" dateTime={mensaje.fechaSegura}>
-            {formatFechaMensaje(mensaje.fechaSegura)}
+          <time className="text-[11px] text-slate-500" dateTime={mensaje.fechaSegura || ''}>
+            {mensaje.fechaSegura ? formatFechaMensaje(mensaje.fechaSegura) : 'Sin fecha'}
           </time>
         </div>
         <div className={`mt-3 rounded-lg border p-4 text-sm leading-relaxed text-slate-800 ${esSoporte ? 'border-primary/25 bg-primary-soft' : 'border-line bg-slate-50'}`}>

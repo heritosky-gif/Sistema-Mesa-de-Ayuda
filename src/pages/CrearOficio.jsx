@@ -38,9 +38,9 @@ const formatPeso = (bytes) =>
 
 const extension = (nombre) => nombre.split('.').pop().toLowerCase()
 
-function validar(form) {
+function validar(form, puedeElegirArea) {
   const e = {}
-  if (!form.destino) e.destino = 'Seleccione el área destinataria.'
+  if (puedeElegirArea && !form.destino) e.destino = 'Seleccione el área destinataria.'
   if (!form.categoria) e.categoria = 'Seleccione la categoría del trámite.'
   if (form.titulo.trim().length < 5) e.titulo = 'Escriba un título de al menos 5 caracteres.'
   if (form.descripcion.trim().length < 20) e.descripcion = 'Describa la solicitud con al menos 20 caracteres.'
@@ -53,9 +53,12 @@ export default function CrearOficio() {
 }
 
 function Formulario() {
-  const { user, dependencia } = useAuth()
+  const { user, role, dependencia } = useAuth()
   const { crearOficio, getBorrador, guardarBorrador, descartarBorrador } = useOficios()
   const navigate = useNavigate()
+
+  const rolActual = String(role || user?.rol || '').toUpperCase()
+  const puedeElegirArea = rolActual === 'ADMIN' || rolActual === 'INTERMEDIARIO'
 
   const [areasReales, setAreasReales] = useState([])
   const [categoriasReales, setCategoriasReales] = useState([])
@@ -71,20 +74,22 @@ function Formulario() {
   const [aviso, setAviso] = useState(null)
   const fileInput = useRef(null)
 
-  const errores = intentado ? validar(form) : {}
+  const errores = intentado ? validar(form, puedeElegirArea) : {}
   const cargando = adjuntos.some((a) => a.progreso < 100)
   const set = (campo) => (valor) => setForm((f) => ({ ...f, [campo]: valor }))
 
-  // Cargar áreas y categorías reales desde PostgreSQL
+  // Cargar áreas (solo si puede elegir) y categorías reales desde PostgreSQL
   useEffect(() => {
-    axiosClient.get('/api/areas/todas')
-      .then((res) => setAreasReales(res.data.filter((a) => a.activo !== false)))
-      .catch((err) => console.error('Error al cargar áreas:', err))
+    if (puedeElegirArea) {
+      axiosClient.get('/api/areas/todas')
+        .then((res) => setAreasReales(res.data.filter((a) => a.activo !== false)))
+        .catch((err) => console.error('Error al cargar áreas:', err))
+    }
 
     axiosClient.get('/api/categorias/todas')
       .then((res) => setCategoriasReales(res.data.filter((c) => c.activo !== false)))
       .catch((err) => console.error('Error al cargar categorías:', err))
-  }, [])
+  }, [puedeElegirArea])
 
   useEffect(() => {
     if (!cargando) return
@@ -144,8 +149,11 @@ function Formulario() {
 
   const emitir = async () => {
     setIntentado(true)
-    const e = validar(form)
-    const primero = ['destino', 'categoria', 'titulo', 'descripcion'].find((k) => e[k])
+    const e = validar(form, puedeElegirArea)
+    const camposOrden = puedeElegirArea
+      ? ['destino', 'categoria', 'titulo', 'descripcion']
+      : ['categoria', 'titulo', 'descripcion']
+    const primero = camposOrden.find((k) => e[k])
     if (primero) {
       document.getElementById(`campo-${primero}`)?.focus()
       return
@@ -160,7 +168,7 @@ function Formulario() {
         descripcion: form.descripcion.trim(),
         prioridad: form.prioridad,
         solicitante: { idUsuario: user.idUsuario || user.id },
-        area: { idArea: parseInt(form.destino, 10) },
+        area: puedeElegirArea && form.destino ? { idArea: parseInt(form.destino, 10) } : null,
         categoria: { idCategoria: parseInt(form.categoria, 10) },
         categoriaString: catSeleccionada?.nombre || form.categoria,
       }
@@ -188,8 +196,7 @@ function Formulario() {
         Generar Nuevo Oficio / Ticket de Atención
       </h1>
       <p className="mt-3 max-w-3xl text-[15px] leading-relaxed text-slate-500">
-        Complete el formulario para registrar una solicitud formal, asignar dependencia destinataria y adjuntar
-        documentación de respaldo.
+        Complete el formulario para registrar una solicitud formal y adjuntar documentación de respaldo.
       </p>
 
       {mostrarAvisoBorrador && (
@@ -207,7 +214,7 @@ function Formulario() {
       )}
 
       <form noValidate onSubmit={(e) => { e.preventDefault(); emitir() }} className="card mt-6 divide-y divide-line">
-        <Seccion icon={Building} titulo="Información General del Oficio" subtitulo="Identifique las áreas involucradas y la prioridad de atención.">
+        <Seccion icon={Building} titulo="Información General del Oficio" subtitulo="Identifique la categoría y la prioridad de atención.">
           <div className="grid gap-6 md:grid-cols-2">
             <Campo etiqueta="Dependencia / Área Emisora" htmlFor="campo-emisora">
               <div id="campo-emisora" className="flex h-14 items-center justify-between gap-3 rounded-lg border border-line bg-slate-50 px-4 text-sm text-slate-500" aria-readonly="true">
@@ -216,16 +223,25 @@ function Formulario() {
               </div>
             </Campo>
 
-            <Campo etiqueta="Área Destinataria" htmlFor="campo-destino" error={errores.destino}>
-              <Select id="campo-destino" value={form.destino} onChange={set('destino')} invalido={!!errores.destino}>
-                <option value="">Seleccione el área destinataria</option>
-                {areasReales.map((a) => (
-                  <option key={a.idArea || a.id} value={a.idArea || a.id}>
-                    {a.nombre}
-                  </option>
-                ))}
-              </Select>
-            </Campo>
+            {puedeElegirArea ? (
+              <Campo etiqueta="Área Destinataria" htmlFor="campo-destino" error={errores.destino}>
+                <Select id="campo-destino" value={form.destino} onChange={set('destino')} invalido={!!errores.destino}>
+                  <option value="">Seleccione el área destinataria</option>
+                  {areasReales.map((a) => (
+                    <option key={a.idArea || a.id} value={a.idArea || a.id}>
+                      {a.nombre}
+                    </option>
+                  ))}
+                </Select>
+              </Campo>
+            ) : (
+              <Campo etiqueta="Área Destinataria" htmlFor="campo-destino-auto">
+                <div id="campo-destino-auto" className="flex h-14 items-center justify-between gap-3 rounded-lg border border-line bg-slate-50 px-4 text-sm text-slate-500" aria-readonly="true">
+                  <span className="truncate">Por asignar (Intermediario)</span>
+                  <Lock size={16} strokeWidth={1.75} className="shrink-0" />
+                </div>
+              </Campo>
+            )}
 
             <Campo etiqueta="Categoría del Trámite" htmlFor="campo-categoria" error={errores.categoria}>
               <Select id="campo-categoria" value={form.categoria} onChange={set('categoria')} invalido={!!errores.categoria}>

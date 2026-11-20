@@ -1,10 +1,9 @@
-import { useMemo } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { ArrowRight, CircleCheck, Clock, Ellipsis, Files } from 'lucide-react'
 import { useAuth } from '../context/AuthContext'
 import {
   DIAS_REPORTE,
-  FECHA_ACTUAL,
   OBJETIVO_HORAS_RESOLUCION,
 } from '../data/mockData'
 import { useOficios } from '../context/oficiosContext'
@@ -24,16 +23,21 @@ const decimal = (n) => n.toFixed(1).replace('.', ',')
 const plural = (n, uno, varios) => `${n.toLocaleString('es-MX')} ${n === 1 ? uno : varios}`
 
 const primerNombre = (nombre) => {
-  if (!nombre) return 'Usuario';
-  return String(nombre).replace(/^(Dr|Dra|Lic|Ing|Mtro|Mtra)\.\s*/i, '').split(' ')[0];
+  if (!nombre) return 'Usuario'
+  return String(nombre).replace(/^(Dr|Dra|Lic|Ing|Mtro|Mtra)\.\s*/i, '').split(' ')[0]
+}
+
+const aFechaLocalISO = (d = new Date()) => {
+  const pad = (n) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
 }
 
 const normalizarFecha = (fecha) => {
   if (!fecha) return new Date().toISOString()
   if (typeof fecha === 'string') return fecha
   if (Array.isArray(fecha)) {
-    const [y, M, d, h=0, mnt=0, s=0] = fecha
-    return new Date(y, M-1, d, h, mnt, s).toISOString()
+    const [y, M, d, h = 0, mnt = 0, s = 0] = fecha
+    return new Date(y, M - 1, d, h, mnt, s).toISOString()
   }
   return new Date().toISOString()
 }
@@ -51,7 +55,7 @@ function calcularMetricas(lista) {
   const abiertas = lista.filter((o) => !esResuelto(o))
   const resueltas = lista.filter((o) => esResuelto(o))
 
-  const volumen = DIAS_REPORTE.map((dia) => 
+  const volumen = DIAS_REPORTE.map((dia) =>
     lista.filter((o) => normalizarFecha(o.fechaCreacion || o.fecha).startsWith(dia)).length
   )
 
@@ -60,7 +64,7 @@ function calcularMetricas(lista) {
     if (delDia.length === 0) return null
     return Math.round((delDia.reduce((s, o) => s + (o.horasResolucion || 24), 0) / delDia.length) * 10) / 10
   })
-  
+
   const conDato = horas.filter((h) => h != null)
   const promedioHoras = conDato.length ? conDato.reduce((s, h) => s + h, 0) / conDato.length : null
 
@@ -68,7 +72,7 @@ function calcularMetricas(lista) {
     total: lista.length,
     abiertas: abiertas.length,
     resueltas: resueltas.length,
-    vencenHoy: 0, 
+    vencenHoy: 0,
     volumen,
     horas,
     promedioHoras,
@@ -82,7 +86,13 @@ export default function Dashboard() {
   const { user, filterOficios } = useAuth()
   const navigate = useNavigate()
   const { oficios } = useOficios()
-  
+  const [ahoraISO, setAhoraISO] = useState(() => aFechaLocalISO())
+
+  useEffect(() => {
+    const timer = setInterval(() => setAhoraISO(aFechaLocalISO()), 60000)
+    return () => clearInterval(timer)
+  }, [])
+
   // Procesamos solo los tickets que este rol tiene permitido ver
   const m = useMemo(() => calcularMetricas(filterOficios(oficios)), [filterOficios, oficios])
 
@@ -124,18 +134,19 @@ export default function Dashboard() {
         <h1 className="text-2xl font-semibold tracking-tight text-slate-900">Panel de control</h1>
         <p className="flex items-center gap-2 text-sm text-slate-500">
           <span className="h-2.5 w-2.5 rounded-full bg-emerald-700" />
-          Actualizado hoy, {formatHora(FECHA_ACTUAL)}
+          Actualizado hoy, {formatHora(ahoraISO)}
         </p>
       </div>
 
-      
       <div className="grid gap-4 sm:grid-cols-3 xl:grid-cols-[1.75fr_1fr_1fr_1fr]">
         <div className="relative overflow-hidden rounded-card bg-primary p-6 pr-16 text-white sm:col-span-3 xl:col-span-1">
           <div className="absolute inset-y-0 right-0 w-9 bg-primary-hover" aria-hidden="true" />
-          <p className="text-[11px] font-semibold tracking-wide text-white/85">
-            {formatFechaInstitucional(FECHA_ACTUAL)}
+          <p className="text-[11px] font-semibold uppercase tracking-wide text-white/85">
+            {formatFechaInstitucional(ahoraISO)}
           </p>
-          <p className="mt-3 text-lg font-semibold">Hola, {primerNombre(user?.nombreCompleto || user?.nombre_completo || user?.nombre)}</p>
+          <p className="mt-3 text-lg font-semibold">
+            Hola, {primerNombre(user?.nombreCompleto || user?.nombre_completo || user?.nombre)}
+          </p>
           <p className="mt-0.5 text-sm text-white/75">
             {plural(m.abiertas, 'solicitud abierta', 'solicitudes abiertas')} {alcance}.
           </p>
@@ -152,14 +163,13 @@ export default function Dashboard() {
         ))}
       </div>
 
-      
       <div className="grid gap-5 lg:grid-cols-2">
         <ChartCard
           title="Volumen de Tickets por Día"
           value={m.total.toLocaleString('es-MX')}
           unit={m.total === 1 ? 'solicitud' : 'solicitudes'}
           legend="Solicitudes recibidas"
-          note={formatMesAnio(FECHA_ACTUAL)}
+          note={formatMesAnio(ahoraISO)}
         >
           <BarChart data={barData} ariaLabel="Solicitudes recibidas por día" />
         </ChartCard>
@@ -179,7 +189,6 @@ export default function Dashboard() {
         </ChartCard>
       </div>
 
-      
       <div className="card overflow-hidden">
         <div className="flex items-center justify-between gap-3 px-5 py-4">
           <div className="flex items-center gap-3">
@@ -208,7 +217,7 @@ export default function Dashboard() {
             </thead>
             <tbody className="divide-y divide-line">
               {m.recientes.map((o) => {
-                const idReal = o.idTicket || o.id;
+                const idReal = o.idTicket || o.id
                 return (
                   <tr
                     key={idReal}
