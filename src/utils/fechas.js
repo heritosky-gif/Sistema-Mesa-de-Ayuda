@@ -59,7 +59,7 @@ export const formatFechaCorta = (fecha) => {
 }
 
 /** "Hoy, 12:00 h" o "12 oct, 10:00 h" */
-export function formatFechaRelativa(fecha, hoy) {
+export function formatFechaRelativa(fecha, hoy = new Date()) {
   const d = toDate(fecha)
   if (mismoDia(d, hoy)) return `Hoy, ${formatHora(d)}`
   return `${pad(d.getDate())} ${MESES[d.getMonth()].slice(0, 3)}, ${formatHora(d)}`
