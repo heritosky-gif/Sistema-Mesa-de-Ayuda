@@ -4,19 +4,20 @@ import { Building, ChevronDown, CircleCheck, Plus, Search, ShieldCheck, Users, X
 import { useAuth } from '../context/AuthContext'
 import { useInstitucion } from '../context/institucionContext'
 import axiosClient from '../api/axiosClient'
-import { NIVELES, NIVELES_DIRECTIVOS, PERMISOS_POR_ROL, ROLES, ROLE_LABELS } from '../data/mockData'
+import { NIVELES_DIRECTIVOS } from '../data/mockData'
 import Avatar from '../components/Avatar'
 import Modal from '../components/Modal'
 import Pagination from '../components/Pagination'
 import CatalogoModal from '../components/CatalogoModal'
 import RutaUsuarios from '../components/RutaUsuarios'
-import { puedeAdministrarCatalogo, puedeGestionar } from '../utils/permisosUsuarios'
+import { puedeAdministrarCatalogo } from '../utils/permisosUsuarios'
 import { clave } from '../utils/texto'
 
 const POR_PAGINA = 10
 
 const ESTILO_PERMISO = {
   ADMIN: 'bg-primary-soft text-primary',
+  ADMINISTRADOR: 'bg-primary-soft text-primary',
   INTERMEDIARIO: 'bg-amber-50 text-amber-700',
   TECNICO: 'bg-emerald-50 text-emerald-700',
   SOLICITANTE: 'bg-slate-100 text-slate-600',
@@ -31,18 +32,17 @@ export default function Usuarios() {
   const [busqueda, setBusqueda] = useState('')
   const [dependencia, setDependencia] = useState('')
   const [area, setArea] = useState('')
-  const [rolNivel, setRolNivel] = useState('')
+  const [rolFiltro, setRolFiltro] = useState('')
   const [pagina, setPagina] = useState(1)
   const [confirmar, setConfirmar] = useState(null)
   const [catalogoAbierto, setCatalogoAbierto] = useState(false)
   const [bitacoraAbierta, setBitacoraAbierta] = useState(false)
 
-
   const [usuariosReales, setUsuariosReales] = useState([])
 
   useEffect(() => {
     axiosClient.get('/api/usuarios/todos')
-      .then(res => setUsuariosReales(res.data))
+      .then((res) => setUsuariosReales(res.data))
       .catch(console.error)
   }, [])
 
@@ -60,9 +60,9 @@ export default function Usuarios() {
     () => (esSuper ? dependencias : dependencias.filter((d) => d.id === user.dependenciaId)),
     [esSuper, dependencias, user.dependenciaId]
   )
-  
+
   const dependenciaValida = depsFiltro.some((d) => d.id === dependencia) ? dependencia : ''
-  
+
   const areasFiltro = useMemo(() => {
     const ids = dependenciaValida ? [dependenciaValida] : depsFiltro.map((d) => d.id)
     return depsFiltro
@@ -73,26 +73,33 @@ export default function Usuarios() {
       }))
       .filter((g) => g.areas.length)
   }, [depsFiltro, dependenciaValida, areas])
-  
+
   const areaValida = areasFiltro.some((g) => g.areas.some((a) => a.id === area)) ? area : ''
   const areaSeleccionada = areas.find((a) => a.id === areaValida)
 
   const lista = useMemo(() => {
     const q = clave(busqueda)
-    const [tipo, valor] = rolNivel.split(':')
     return visibles
       .filter((u) => {
         if (dependenciaValida && u.dependenciaId !== dependenciaValida) return false
         const nombreArea = typeof u.area === 'object' ? u.area?.nombre : u.area
         if (areaSeleccionada && (u.dependenciaId !== areaSeleccionada.dependenciaId || nombreArea !== areaSeleccionada.nombre))
           return false
-        if (tipo === 'rol' && u.rol !== valor) return false
-        if (tipo === 'nivel' && u.nivel !== valor) return false
+
+        if (rolFiltro) {
+          const rolUsuario = String(u.rol || '').toUpperCase()
+          if (rolFiltro === 'ADMIN') {
+            if (rolUsuario !== 'ADMIN' && rolUsuario !== 'ADMINISTRADOR') return false
+          } else if (rolUsuario !== rolFiltro) {
+            return false
+          }
+        }
+
         if (!q) return true
-        return [(u.nombreCompleto || u.nombre), u.correo, u.rol].some((v) => clave(v || '').includes(q))
+        return [u.nombreCompleto || u.nombre, u.correo, u.rol].some((v) => clave(v || '').includes(q))
       })
       .sort((a, b) => Number(b.activo) - Number(a.activo) || (a.nombreCompleto || a.nombre || '').localeCompare(b.nombreCompleto || b.nombre || ''))
-  }, [visibles, busqueda, dependenciaValida, areaSeleccionada, rolNivel])
+  }, [visibles, busqueda, dependenciaValida, areaSeleccionada, rolFiltro])
 
   const totalPaginas = Math.max(1, Math.ceil(lista.length / POR_PAGINA))
   const paginaActual = Math.min(pagina, totalPaginas)
@@ -102,25 +109,24 @@ export default function Usuarios() {
   const depsVinculadas = new Set(visibles.map((u) => u.dependenciaId))
   const areasVinculadas = areas.filter((a) => depsVinculadas.has(a.dependenciaId)).length
   const activos = visibles.filter((u) => u.activo).length
-  const hayFiltros = busqueda || dependenciaValida || areaValida || rolNivel
+  const hayFiltros = busqueda || dependenciaValida || areaValida || rolFiltro
 
   const restablecer = () => {
     setBusqueda('')
     setDependencia('')
     setArea('')
-    setRolNivel('')
+    setRolFiltro('')
     setPagina(1)
   }
 
   const confirmarCambio = async () => {
     try {
-      const idReal = confirmar.idUsuario || confirmar.id;
-      await axiosClient.put(`/api/usuarios/${idReal}/estatus`, { activo: !confirmar.activo });
-      // Refrescamos el estatus en la pantalla instantáneamente sin recargar la página
-      setUsuariosReales(prev => prev.map(u => (u.idUsuario || u.id) === idReal ? { ...u, activo: !u.activo } : u));
-      setConfirmar(null);
+      const idReal = confirmar.idUsuario || confirmar.id
+      await axiosClient.put(`/api/usuarios/${idReal}/estatus`, { activo: !confirmar.activo })
+      setUsuariosReales((prev) => prev.map((u) => ((u.idUsuario || u.id) === idReal ? { ...u, activo: !u.activo } : u)))
+      setConfirmar(null)
     } catch (error) {
-      console.error("Error al cambiar estatus:", error);
+      console.error('Error al cambiar estatus:', error)
     }
   }
 
@@ -201,6 +207,15 @@ export default function Usuarios() {
               className="h-11 w-full rounded-lg border border-line bg-canvas pl-11 pr-4 text-sm text-slate-800 placeholder:text-slate-500 focus:border-primary focus:bg-white focus:outline-none focus:ring-2 focus:ring-primary/20"
             />
           </label>
+
+          <FiltroSelect etiqueta="Rol" value={rolFiltro} onChange={conReinicio(setRolFiltro)}>
+            <option value="">Todos</option>
+            <option value="ADMIN">Administrador</option>
+            <option value="INTERMEDIARIO">Intermediario</option>
+            <option value="TECNICO">Técnico</option>
+            <option value="SOLICITANTE">Solicitante</option>
+          </FiltroSelect>
+
           {hayFiltros && (
             <button onClick={restablecer} className="text-sm font-medium text-primary hover:text-primary-hover">
               Restablecer
@@ -227,7 +242,7 @@ export default function Usuarios() {
                 const esYo = (u.idUsuario || u.id) === (user.idUsuario || user.id)
                 const nombreMostrar = u.nombreCompleto || u.nombre || 'Sin nombre'
                 const rolLimpio = String(u.rol || 'SIN_ROL').toUpperCase()
-                
+
                 return (
                   <tr key={u.idUsuario || u.id || Math.random()} className={u.activo ? '' : 'bg-slate-50/50'}>
                     <td className="px-6 py-5">
