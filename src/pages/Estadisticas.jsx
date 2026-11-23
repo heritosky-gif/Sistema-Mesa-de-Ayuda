@@ -2,29 +2,26 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { Building, ChevronDown, Clock, FileSpreadsheet, Files, Printer } from 'lucide-react'
 import { useAuth } from '../context/AuthContext'
 import { useOficios } from '../context/oficiosContext'
-import { useInstitucion } from '../context/institucionContext'
-import {
-  DIAS_REPORTE,
-  ESTADOS_EN_SEGUIMIENTO,
-  ESTADOS_OFICIO,
-  ESTADOS_PENDIENTES,
-  FECHA_ACTUAL,
-  OBJETIVO_HORAS_RESOLUCION,
-  PRIORIDAD_LABELS,
-  PRIORIDADES,
-  getDestinoId,
-} from '../data/mockData'
+import axiosClient from '../api/axiosClient'
+import { OBJETIVO_HORAS_RESOLUCION } from '../data/mockData'
 import GroupedBarChart from '../components/charts/GroupedBarChart'
 import DonutChart from '../components/charts/DonutChart'
 import { CHART_COLORS } from '../components/charts/chartUtils'
 import { exportCsv } from '../utils/exportCsv'
 import { formatFechaCorta, formatHora } from '../utils/fechas'
 
-// El periodo se mide hacia atrás desde la fecha de corte de la demo
 const PERIODOS = [
-  { value: '7', label: `Últimos ${DIAS_REPORTE.length} días`, dias: DIAS_REPORTE.length },
-  { value: '3', label: 'Últimos 3 días', dias: 3 },
+  { value: 'todos', label: 'Todo el historial', dias: null },
+  { value: '30', label: 'Últimos 30 días', dias: 30 },
+  { value: '7', label: 'Últimos 7 días', dias: 7 },
   { value: '1', label: 'Hoy', dias: 1 },
+]
+
+const OPCIONES_URGENCIA = [
+  { value: '', label: 'Todos los niveles' },
+  { value: 'ALTA', label: 'Alta / Prioritaria' },
+  { value: 'MEDIA', label: 'Media' },
+  { value: 'BAJA', label: 'Baja' },
 ]
 
 const COLORES_ESTATUS = {
@@ -34,72 +31,170 @@ const COLORES_ESTATUS = {
 }
 
 const META_CUMPLIMIENTO = 90
+const HORA_MS = 36e5
 
 const num = (n) => n.toLocaleString('es-MX')
 const dec = (n) => (n == null ? '—' : n.toLocaleString('es-MX', { minimumFractionDigits: 1, maximumFractionDigits: 1 }))
 const pct = (parte, total) => (total ? (parte / total) * 100 : 0)
 const promedio = (xs) => (xs.length ? xs.reduce((s, x) => s + x, 0) / xs.length : null)
 
-// Atendida dentro de su fecha límite
-const aTiempo = (o) =>
-  new Date(o.fechaCreacion).getTime() + o.horasResolucion * 36e5 <= new Date(o.fechaLimite).getTime()
+const normalizarFecha = (fecha) => {
+  if (!fecha) return null
+  if (typeof fecha === 'string') return fecha
+  if (typeof fecha === 'number') return new Date(fecha).toISOString()
+  if (Array.isArray(fecha)) {
+    const [y, M, d, h = 0, mnt = 0, s = 0] = fecha
+    return new Date(y, M - 1, d, h, mnt, s).toISOString()
+  }
+  return null
+}
 
-/** Indicadores de un grupo de oficios */
+const getEstado = (o) => String(o.estatus || o.estado || 'PENDIENTE').toUpperCase()
+const esResuelta = (o) => ['RESUELTO', 'RESUELTA', 'FINALIZADO', 'CERRADO'].includes(getEstado(o))
+const esEnProceso = (o) => ['EN_PROCESO', 'EN_PROGRESO', 'ASIGNADO', 'EN_ATENCION'].includes(getEstado(o))
+const esPendiente = (o) => ['PENDIENTE', 'ABIERTO', 'NUEVO', 'SIN_ASIGNAR'].includes(getEstado(o))
+
+const limiteSlaHoras = (o) => {
+  const p = String(o.prioridad || '').toUpperCase()
+  return p === 'ALTA' || p === 'CRITICA' ? 24 : 48
+}
+
+const calcularHorasResolucion = (o) => {
+  const inicio = normalizarFecha(o.fechaCreacion)
+  const cierre = normalizarFecha(o.fechaCierre)
+  if (!inicio || !cierre) return null
+  const diff = (new Date(cierre).getTime() - new Date(inicio).getTime()) / HORA_MS
+  return Math.max(0.1, diff)
+}
+
 function indicadores(lista) {
-  const atendidas = lista.filter((o) => o.estado === ESTADOS_OFICIO.RESUELTA)
-  const vencidas = lista.filter((o) => o.estado !== ESTADOS_OFICIO.RESUELTA && new Date(o.fechaLimite) < FECHA_ACTUAL)
-  const horas = promedio(atendidas.map((o) => o.horasResolucion))
-  const evaluables = atendidas.length + vencidas.length
+  const ahora = Date.now()
+  const atendidas = lista.filter(esResuelta)
+
+  const horasLista = atendidas.map(calcularHorasResolucion).filter((h) => h != null)
+  const horas = promedio(horasLista)
+
+  const atendidasATiempo = atendidas.filter((o) => {
+    const h = calcularHorasResolucion(o)
+    return h == null ? true : h <= limiteSlaHoras(o)
+  }).length
+
+  const vencidasAbiertas = lista.filter((o) => {
+    if (esResuelta(o)) return false
+    const inicio = normalizarFecha(o.fechaCreacion)
+    if (!inicio) return false
+    return (ahora - new Date(inicio).getTime()) / HORA_MS > limiteSlaHoras(o)
+  }).length
+
+  const evaluables = atendidas.length + vencidasAbiertas
+  const dentroObj = horasLista.length
+    ? pct(horasLista.filter((h) => h <= OBJETIVO_HORAS_RESOLUCION).length, horasLista.length)
+    : atendidas.length
+      ? 100
+      : 0
+
   return {
     recibidos: lista.length,
     atendidos: atendidas.length,
-    pendientes: lista.filter((o) => ESTADOS_PENDIENTES.includes(o.estado)).length,
-    enProceso: lista.filter((o) => ESTADOS_EN_SEGUIMIENTO.includes(o.estado)).length,
+    pendientes: lista.filter(esPendiente).length,
+    enProceso: lista.filter(esEnProceso).length,
     horas,
     dias: horas == null ? null : horas / 24,
-    cumplimiento: evaluables ? pct(atendidas.filter(aTiempo).length, evaluables) : null,
-    dentroObjetivo: pct(atendidas.filter((o) => o.horasResolucion <= OBJETIVO_HORAS_RESOLUCION).length, atendidas.length),
+    cumplimiento: evaluables ? pct(atendidasATiempo, evaluables) : null,
+    dentroObjetivo: dentroObj,
   }
 }
 
 export default function Estadisticas() {
   const { filterOficios } = useAuth()
   const { oficios } = useOficios()
-  const { dependencias } = useInstitucion()
 
-  const [periodo, setPeriodo] = useState('7')
-  const [dependencia, setDependencia] = useState('')
+  const [areasReales, setAreasReales] = useState([])
+  const [periodo, setPeriodo] = useState('30')
+  const [areaFiltro, setAreaFiltro] = useState('')
   const [urgencia, setUrgencia] = useState('')
+  const [estatusActivo, setEstatusActivo] = useState(null)
+
+  useEffect(() => {
+    axiosClient
+      .get('/api/areas/todas')
+      .then((res) => setAreasReales(res.data.filter((a) => a.activo !== false)))
+      .catch((err) => console.error('Error al cargar áreas en estadísticas:', err))
+  }, [])
 
   const visibles = useMemo(() => filterOficios(oficios), [filterOficios, oficios])
 
-  // Solo se ofrecen las dependencias que aparecen en los oficios visibles para el rol
-  const dependenciasDisponibles = useMemo(() => {
-    const ids = new Set(visibles.flatMap((o) => [o.dependenciaId, getDestinoId(o)]))
-    return dependencias.filter((d) => ids.has(d.id))
-  }, [visibles, dependencias])
-  const dependenciaValida = dependenciasDisponibles.some((d) => d.id === dependencia) ? dependencia : ''
-
   const filtrados = useMemo(() => {
-    const dias = PERIODOS.find((p) => p.value === periodo).dias
-    const desde = DIAS_REPORTE[DIAS_REPORTE.length - dias]
-    return visibles.filter(
-      (o) =>
-        o.fechaCreacion.slice(0, 10) >= desde &&
-        (!urgencia || o.prioridad === urgencia) &&
-        (!dependenciaValida || o.dependenciaId === dependenciaValida || getDestinoId(o) === dependenciaValida)
-    )
-  }, [visibles, periodo, urgencia, dependenciaValida])
+    const dias = PERIODOS.find((p) => p.value === periodo)?.dias
+    let inicioMs = null
+    if (dias != null) {
+      const d = new Date()
+      d.setHours(0, 0, 0, 0)
+      d.setDate(d.getDate() - (dias - 1))
+      inicioMs = d.getTime()
+    }
+
+    return visibles.filter((o) => {
+      if (inicioMs != null) {
+        const f = normalizarFecha(o.fechaCreacion)
+        if (!f || new Date(f).getTime() < inicioMs) return false
+      }
+      if (urgencia && String(o.prioridad || '').toUpperCase() !== urgencia) return false
+      if (areaFiltro) {
+        const areaRec = String(o.area?.idArea || o.area?.id || '')
+        const areaEmi = String(o.solicitante?.area?.idArea || o.solicitante?.area?.id || '')
+        if (areaFiltro === 'SIN_AREA') {
+          if (areaRec !== '') return false
+        } else if (areaRec !== String(areaFiltro) && areaEmi !== String(areaFiltro)) {
+          return false
+        }
+      }
+      return true
+    })
+  }, [visibles, periodo, urgencia, areaFiltro])
 
   const r = useMemo(() => {
     const general = indicadores(filtrados)
 
-    // Desglose por dependencia receptora
-    const filas = dependencias.map((d) => ({
-      dep: d,
-      emitidos: filtrados.filter((o) => o.dependenciaId === d.id).length,
-      ...indicadores(filtrados.filter((o) => getDestinoId(o) === d.id)),
-    }))
+    // Mapa de áreas reales + opción "Por asignar"
+    const mapaAreas = new Map()
+    areasReales.forEach((a) => {
+      const id = String(a.idArea || a.id)
+      mapaAreas.set(id, { id, nombre: a.nombre, nombreCorto: a.nombre.length > 18 ? `${a.nombre.slice(0, 16)}…` : a.nombre })
+    })
+    filtrados.forEach((o) => {
+      if (o.area) {
+        const id = String(o.area.idArea || o.area.id)
+        if (!mapaAreas.has(id)) {
+          mapaAreas.set(id, {
+            id,
+            nombre: o.area.nombre,
+            nombreCorto: o.area.nombre.length > 18 ? `${o.area.nombre.slice(0, 16)}…` : o.area.nombre,
+          })
+        }
+      }
+    })
+
+    const filas = [...mapaAreas.values()].map((area) => {
+      const recibidosArea = filtrados.filter((o) => String(o.area?.idArea || o.area?.id || '') === area.id)
+      const emitidosArea = filtrados.filter((o) => String(o.solicitante?.area?.idArea || o.solicitante?.area?.id || '') === area.id)
+      return {
+        dep: area,
+        emitidos: emitidosArea.length,
+        ...indicadores(recibidosArea),
+      }
+    })
+
+    // Incluir tickets aún sin área asignada
+    const sinArea = filtrados.filter((o) => !o.area)
+    if (sinArea.length > 0) {
+      filas.push({
+        dep: { id: 'SIN_AREA', nombre: 'Por asignar (Sin área)', nombreCorto: 'Por asignar' },
+        emitidos: 0,
+        ...indicadores(sinArea),
+      })
+    }
+
     const tabla = filas.filter((f) => f.recibidos > 0).sort((a, b) => b.recibidos - a.recibidos)
     const grafica = filas
       .filter((f) => f.emitidos + f.recibidos > 0)
@@ -107,7 +202,7 @@ export default function Estadisticas() {
       .slice(0, 5)
 
     return { general, tabla, grafica, mayorCarga: tabla[0] ?? null }
-  }, [filtrados, dependencias])
+  }, [filtrados, areasReales])
 
   const { general, tabla, grafica, mayorCarga } = r
 
@@ -116,15 +211,17 @@ export default function Estadisticas() {
     { key: 'proceso', label: 'En Proceso', value: general.enProceso, color: COLORES_ESTATUS.proceso },
     { key: 'pendientes', label: 'Pendientes', value: general.pendientes, color: COLORES_ESTATUS.pendientes },
   ]
-  const [estatusActivo, setEstatusActivo] = useState(null)
+
+  const ahora = new Date()
 
   const exportar = () =>
     exportCsv(
-      `reporte-desempeno-${FECHA_ACTUAL.toISOString().slice(0, 10)}.csv`,
+      `reporte-desempeno-${ahora.toISOString().slice(0, 10)}.csv`,
       [
-        { header: 'Dependencia / Área', value: (f) => f.nombre },
+        { header: 'Área', value: (f) => f.nombre },
         { header: 'Oficios recibidos', value: (f) => f.recibidos },
         { header: 'Oficios atendidos', value: (f) => f.atendidos },
+        { header: 'En proceso', value: (f) => f.enProceso },
         { header: 'Pendientes', value: (f) => f.pendientes },
         { header: 'Promedio de respuesta (días)', value: (f) => (f.dias == null ? '' : f.dias.toFixed(1)) },
         { header: '% Cumplimiento', value: (f) => (f.cumplimiento == null ? '' : f.cumplimiento.toFixed(1)) },
@@ -134,7 +231,6 @@ export default function Estadisticas() {
 
   return (
     <>
-      {/* Encabezado */}
       <nav className="flex items-center gap-2 text-[11px]" aria-label="Ruta">
         <span className="font-bold uppercase tracking-wide text-primary">Analítica institucional</span>
         <span className="text-slate-300">•</span>
@@ -144,14 +240,13 @@ export default function Estadisticas() {
         Estadísticas y Reportes de Desempeño
       </h1>
       <p className="mt-2 text-sm text-slate-500">
-        Análisis cualitativo y cuantitativo del flujo de oficios, carga de trabajo por dependencia y tiempos de
-        respuesta.
+        Análisis cualitativo y cuantitativo del flujo de oficios, carga de trabajo por área y tiempos de respuesta.
       </p>
 
       <div className="mt-6 flex flex-wrap items-center justify-between gap-4">
         <p className="flex items-center gap-2 text-xs text-slate-500">
           <span className="h-1.5 w-1.5 rounded-full bg-emerald-600" />
-          Corte al {formatFechaCorta(FECHA_ACTUAL)} · {formatHora(FECHA_ACTUAL)}
+          Corte al {formatFechaCorta(ahora)} · {formatHora(ahora)}
         </p>
         <div className="flex flex-wrap gap-3 print:hidden">
           <button onClick={() => window.print()} className="btn-secondary h-10 px-6 font-semibold text-slate-900">
@@ -170,22 +265,20 @@ export default function Estadisticas() {
           opciones={PERIODOS.map((p) => ({ value: p.value, label: p.label }))}
         />
         <Filtro
-          etiqueta="Dependencia"
-          value={dependenciaValida}
-          onChange={setDependencia}
+          etiqueta="Área"
+          value={areaFiltro}
+          onChange={setAreaFiltro}
           opciones={[
-            { value: '', label: 'Todas las Secretarías' },
-            ...dependenciasDisponibles.map((d) => ({ value: d.id, label: d.nombre })),
+            { value: '', label: 'Todas las áreas' },
+            ...areasReales.map((a) => ({ value: String(a.idArea || a.id), label: a.nombre })),
+            { value: 'SIN_AREA', label: 'Por asignar (Sin área)' },
           ]}
         />
         <Filtro
           etiqueta="Urgencia"
           value={urgencia}
           onChange={setUrgencia}
-          opciones={[
-            { value: '', label: 'Todos los niveles' },
-            ...Object.values(PRIORIDADES).map((p) => ({ value: p, label: PRIORIDAD_LABELS[p] })),
-          ]}
+          opciones={OPCIONES_URGENCIA}
         />
       </div>
 
@@ -201,7 +294,7 @@ export default function Estadisticas() {
           etiqueta="Tiempo Promedio de Respuesta"
           icon={Clock}
           valor={general.dias == null ? '—' : `${dec(general.dias)} días`}
-          nota={general.horas == null ? 'Sin solicitudes resueltas' : `Sobre solicitudes resueltas · ≈ ${dec(general.horas)} h`}
+          nota={general.horas == null ? 'Sin solicitudes cerradas con fecha' : `Sobre solicitudes resueltas · ≈ ${dec(general.horas)} h`}
         />
         <Kpi
           etiqueta="Área con Mayor Carga"
@@ -215,7 +308,7 @@ export default function Estadisticas() {
       {/* Gráficas */}
       <div className="mt-6 grid gap-6 xl:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)]">
         <div className="card p-6">
-          <h2 className="text-lg font-semibold text-slate-900">Distribución de Solicitudes y Oficios por Área Gubernamental</h2>
+          <h2 className="text-lg font-semibold text-slate-900">Distribución de Solicitudes y Oficios por Área</h2>
           <div className="mt-3 flex flex-wrap items-center justify-between gap-2 text-[11px] text-slate-500">
             <span>Oficios · {grafica.length} áreas con mayor volumen</span>
             <div className="flex gap-4">
@@ -226,7 +319,7 @@ export default function Estadisticas() {
           <div className="mt-4">
             {grafica.length ? (
               <GroupedBarChart
-                ariaLabel="Oficios emitidos y recibidos por dependencia"
+                ariaLabel="Oficios emitidos y recibidos por área"
                 series={[
                   { key: 'emitidos', label: 'Emitidos', color: CHART_COLORS.primary, labelColor: CHART_COLORS.primary },
                   { key: 'recibidos', label: 'Recibidos', color: '#CBD5E1' },
@@ -242,9 +335,8 @@ export default function Estadisticas() {
             )}
           </div>
           <p className="mt-3 border-t border-line pt-3 text-[11px] leading-relaxed text-slate-500">
-            <span className="font-semibold text-slate-600">Emitidos:</span> oficios que el área envía.{' '}
-            <span className="font-semibold text-slate-600">Recibidos:</span> oficios dirigidos al área para su
-            atención, incluidos los internos.
+            <span className="font-semibold text-slate-600">Emitidos:</span> oficios creados por personal del área.{' '}
+            <span className="font-semibold text-slate-600">Recibidos:</span> oficios asignados al área para su atención.
           </p>
         </div>
 
@@ -273,27 +365,24 @@ export default function Estadisticas() {
           <div className="mt-4 rounded-lg bg-slate-50 px-4 py-3 text-[11px] leading-relaxed text-slate-600">
             <p className="font-semibold text-slate-800">SLA institucional</p>
             <p className="mt-1">
-              Cada solicitud debe atenderse antes de su fecha límite, con un objetivo de resolución de{' '}
-              {OBJETIVO_HORAS_RESOLUCION} h. En este periodo, el{' '}
-              <span className="font-semibold">{dec(general.cumplimiento ?? 0)}%</span> cumplió su plazo y el{' '}
-              <span className="font-semibold">{dec(general.dentroObjetivo)}%</span> de las resueltas se atendió en{' '}
-              {OBJETIVO_HORAS_RESOLUCION} h o menos.
+              Objetivo de atención: 24 h para prioridad Alta y 48 h para Media/Baja (referencia {OBJETIVO_HORAS_RESOLUCION} h).
+              En este periodo, el <span className="font-semibold">{dec(general.cumplimiento ?? 0)}%</span> cumplió su plazo.
             </p>
           </div>
         </div>
       </div>
 
-      {/* Desglose por dependencia */}
+      {/* Desglose por área */}
       <div className="card mt-6 overflow-hidden">
         <div className="flex flex-wrap items-start justify-between gap-3 px-6 pb-5 pt-6">
           <div>
-            <h2 className="text-lg font-semibold text-slate-900">Desglose Operativo por Dependencia</h2>
+            <h2 className="text-lg font-semibold text-slate-900">Desglose Operativo por Área</h2>
             <p className="mt-1 text-xs text-slate-500">
               Volumen recibido, resolución y oportunidad de atención durante el periodo seleccionado.
             </p>
           </div>
           <span className="rounded-md bg-slate-100 px-2.5 py-1 text-[11px] font-medium text-slate-600">
-            {tabla.length} {tabla.length === 1 ? 'dependencia' : 'dependencias'}
+            {tabla.length} {tabla.length === 1 ? 'área' : 'áreas'}
           </span>
         </div>
 
@@ -301,7 +390,7 @@ export default function Estadisticas() {
           <table className="w-full min-w-[860px] text-left text-sm">
             <thead className="bg-slate-50 text-[11px] font-semibold text-slate-600">
               <tr>
-                <th className="px-6 py-3 font-semibold">Dependencia / Área</th>
+                <th className="px-6 py-3 font-semibold">Área</th>
                 <th className="px-6 py-3 font-semibold">Oficios<br />Recibidos</th>
                 <th className="px-6 py-3 font-semibold">Oficios<br />Atendidos</th>
                 <th className="px-6 py-3 font-semibold">Pendientes</th>
@@ -346,8 +435,7 @@ export default function Estadisticas() {
           {tabla.length === 0 && <SinDatos />}
         </div>
         <p className="border-t border-line px-6 py-4 text-[11px] text-slate-500">
-          Fuente: BCSnosUNE · Datos de demostración. % Cumplimiento = solicitudes atendidas dentro de su fecha límite
-          entre atendidas y vencidas sin atender. Meta: {META_CUMPLIMIENTO}%.
+          Fuente: Mesa de Ayuda Institucional · Datos en tiempo real desde PostgreSQL. Meta de cumplimiento: {META_CUMPLIMIENTO}%.
         </p>
       </div>
     </>
@@ -468,7 +556,7 @@ function MenuExportar({ onExcel, onPdf }) {
             className="flex w-full items-center gap-3 px-4 py-2.5 text-left text-sm text-slate-700 hover:bg-slate-50"
           >
             <FileSpreadsheet size={16} className="text-emerald-700" />
-            Excel (CSV) — desglose por dependencia
+            Excel (CSV) — desglose por área
           </button>
           <button
             role="menuitem"
