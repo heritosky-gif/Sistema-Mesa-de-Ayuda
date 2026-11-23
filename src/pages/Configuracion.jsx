@@ -16,7 +16,7 @@ export default function Configuracion() {
 }
 
 function PerfilForm() {
-  const { user, dependencia } = useAuth()
+  const { user, dependencia , updateUser } = useAuth()
   const idReal = user?.idUsuario || user?.id
   const claveFoto = `foto_perfil_${idReal}`
 
@@ -102,11 +102,19 @@ function PerfilForm() {
         payload.passwordNueva = form.nueva
       }
 
-      await axiosClient.put(`/api/usuarios/${idReal}/perfil`, payload)
+      const res = await axiosClient.put(`/api/usuarios/${idReal}/perfil`, payload)
 
-      // Guardar o quitar fotografía localmente
       if (form.foto) localStorage.setItem(claveFoto, form.foto)
       else localStorage.removeItem(claveFoto)
+
+      if (typeof updateUser === 'function') {
+        updateUser({
+          ...(res?.data || {}),
+          nombreCompleto: form.nombre.trim(),
+          nombre: form.nombre.trim(),
+          foto: form.foto,
+        })
+      }
 
       setNombreBase(form.nombre.trim())
       setFotoBase(form.foto)
@@ -118,6 +126,7 @@ function PerfilForm() {
           : 'Su perfil se actualizó correctamente.',
       })
     } catch (error) {
+      console.error('Error al actualizar perfil:', error)
       const msg = error.response?.data?.error || 'No se pudo actualizar el perfil. Intente de nuevo.'
       setAviso({ error: true, texto: msg })
     } finally {
