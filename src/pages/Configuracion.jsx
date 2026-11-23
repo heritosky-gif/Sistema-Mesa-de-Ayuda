@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { Camera, Check, ChevronDown, CircleCheck, CircleExclamationPoint, Eye, EyeOff, LoaderCircle, Lock } from 'lucide-react'
 import { useAuth } from '../context/AuthContext'
-import { useInstitucion } from '../context/institucionContext'
+import axiosClient from '../api/axiosClient'
 import Avatar from '../components/Avatar'
 import RutaConfiguracion from '../components/RutaConfiguracion'
 import { tituloNivelAcceso } from '../utils/nivelAcceso'
@@ -10,23 +10,30 @@ import { reducirImagen } from '../utils/imagen'
 
 const MAX_FOTO = 5 * 1024 * 1024
 
-/**
- * Autoservicio del usuario en sesión: nombre, fotografía y contraseña.
- * Es independiente de la gestión de usuarios (/usuarios): aquí no se puede cambiar
- * el rol, la dependencia, el área ni el correo.
- */
 export default function Configuracion() {
   const { user } = useAuth()
-  // `key`: al cambiar de usuario (selector de rol) el formulario se reinicia con sus datos
-  return <PerfilForm key={user.id} />
+  return <PerfilForm key={user?.idUsuario || user?.id} />
 }
 
 function PerfilForm() {
   const { user, dependencia } = useAuth()
-  const { actualizarPerfil } = useInstitucion()
+  const idReal = user?.idUsuario || user?.id
+  const claveFoto = `foto_perfil_${idReal}`
 
-  const inicial = () => ({ nombre: user.nombre, foto: user.foto ?? null, actual: '', nueva: '', confirmacion: '' })
-  const [form, setForm] = useState(inicial)
+  const nombreGuardado = user?.nombreCompleto || user?.nombre || ''
+  const fotoGuardada = localStorage.getItem(claveFoto) || user?.foto || null
+  const areaTexto = typeof user?.area === 'object' ? user?.area?.nombre : user?.area
+
+  const [nombreBase, setNombreBase] = useState(nombreGuardado)
+  const [fotoBase, setFotoBase] = useState(fotoGuardada)
+
+  const [form, setForm] = useState({
+    nombre: nombreGuardado,
+    foto: fotoGuardada,
+    actual: '',
+    nueva: '',
+    confirmacion: '',
+  })
   const [intentado, setIntentado] = useState(false)
   const [guardando, setGuardando] = useState(false)
   const [errorFoto, setErrorFoto] = useState(null)
@@ -35,13 +42,16 @@ function PerfilForm() {
 
   useEffect(() => {
     if (!aviso) return
-    const t = setTimeout(() => setAviso(null), 3000)
+    const t = setTimeout(() => setAviso(null), 3200)
     return () => clearTimeout(t)
   }, [aviso])
 
   const set = (campo) => (valor) => setForm((f) => ({ ...f, [campo]: valor }))
   const cambiaPassword = !!(form.actual || form.nueva || form.confirmacion)
-  const hayCambios = (user?.nombre_completo || user?.nombre || '').trim() !== user.nombre || form.foto !== (user.foto ?? null) || cambiaPassword
+  const hayCambios =
+    form.nombre.trim() !== nombreBase.trim() ||
+    form.foto !== fotoBase ||
+    cambiaPassword
 
   const errores = {}
   if (intentado) {
@@ -67,15 +77,15 @@ function PerfilForm() {
   }
 
   const cancelar = () => {
-    setForm(inicial())
+    setForm({ nombre: nombreBase, foto: fotoBase, actual: '', nueva: '', confirmacion: '' })
     setIntentado(false)
     setErrorFoto(null)
   }
 
-  const guardar = (e) => {
+  const guardar = async (e) => {
     e.preventDefault()
     setIntentado(true)
-    // Se recalculan los errores con el estado actual (no con los de la última renderización)
+
     const invalido =
       form.nombre.trim().length < 3 ||
       (cambiaPassword &&
@@ -83,15 +93,36 @@ function PerfilForm() {
     if (invalido) return
 
     setGuardando(true)
-    // Simula la latencia del servidor
-    setTimeout(() => {
-      const r = actualizarPerfil(user.id, { nombre: form.nombre, foto: form.foto, nuevaPassword: cambiaPassword })
-      setGuardando(false)
-      if (!r.ok) return setAviso({ error: true, texto: r.error })
+    try {
+      const payload = {
+        nombreCompleto: form.nombre.trim(),
+      }
+      if (cambiaPassword) {
+        payload.passwordActual = form.actual
+        payload.passwordNueva = form.nueva
+      }
+
+      await axiosClient.put(`/api/usuarios/${idReal}/perfil`, payload)
+
+      // Guardar o quitar fotografía localmente
+      if (form.foto) localStorage.setItem(claveFoto, form.foto)
+      else localStorage.removeItem(claveFoto)
+
+      setNombreBase(form.nombre.trim())
+      setFotoBase(form.foto)
       setForm((f) => ({ ...f, nombre: f.nombre.trim(), actual: '', nueva: '', confirmacion: '' }))
       setIntentado(false)
-      setAviso({ texto: cambiaPassword ? 'Perfil y contraseña actualizados correctamente.' : 'Su perfil se actualizó correctamente.' })
-    }, 700)
+      setAviso({
+        texto: cambiaPassword
+          ? 'Perfil y contraseña actualizados correctamente.'
+          : 'Su perfil se actualizó correctamente.',
+      })
+    } catch (error) {
+      const msg = error.response?.data?.error || 'No se pudo actualizar el perfil. Intente de nuevo.'
+      setAviso({ error: true, texto: msg })
+    } finally {
+      setGuardando(false)
+    }
   }
 
   return (
@@ -106,13 +137,11 @@ function PerfilForm() {
 
       <form noValidate onSubmit={guardar} className="card">
         <div className="divide-y divide-line px-6 sm:px-8">
-          {/* ── Información personal ── */}
           <section className="py-8">
             <h2 className="text-base font-semibold text-slate-900">Información Personal y Fotografía</h2>
 
             <div className="mt-8 flex items-end">
-              <Avatar name={form.nombre || user.nombre} src={form.foto} size="xl" />
-              {/* El botón se encima sobre la esquina inferior derecha del avatar */}
+              <Avatar name={form.nombre || nombreBase} src={form.foto} size="xl" />
               <div className="-ml-7 flex flex-wrap items-center gap-3 pb-0.5">
                 <button
                   type="button"
@@ -150,12 +179,11 @@ function PerfilForm() {
                 />
               </Campo>
               <Campo id="perfil-correo" etiqueta="Correo Institucional">
-                <Bloqueado id="perfil-correo" valor={user.correo} />
+                <Bloqueado id="perfil-correo" valor={user?.correo} />
               </Campo>
             </div>
           </section>
 
-          {/* ── Adscripción (lectura) ── */}
           <section className="py-8">
             <h2 className="text-base font-semibold text-slate-900">Adscripción Institucional (Información de Lectura)</h2>
             <p className="mt-2 text-sm text-slate-500">
@@ -163,10 +191,10 @@ function PerfilForm() {
             </p>
             <div className="mt-6 grid gap-x-6 gap-y-5 md:grid-cols-2">
               <Campo id="perfil-dependencia" etiqueta="Dependencia / Sector">
-                <Bloqueado id="perfil-dependencia" valor={dependencia?.nombre} desplegable />
+                <Bloqueado id="perfil-dependencia" valor={dependencia?.nombre || 'Secretaría de Finanzas'} desplegable />
               </Campo>
               <Campo id="perfil-area" etiqueta="Área / Departamento">
-                <Bloqueado id="perfil-area" valor={user.area} desplegable />
+                <Bloqueado id="perfil-area" valor={areaTexto || 'Sin área asignada'} desplegable />
               </Campo>
               <div className="md:col-span-2">
                 <Campo id="perfil-rol" etiqueta="Rol de Acceso Asignado">
@@ -177,16 +205,15 @@ function PerfilForm() {
                   >
                     <Lock size={15} className="shrink-0 text-slate-500" aria-label="Campo bloqueado" />
                     <span className="min-w-[240px] rounded-md bg-slate-200/70 px-2.5 py-1.5 text-xs font-semibold text-slate-600">
-                      {tituloNivelAcceso(user)}
+                      {tituloNivelAcceso(user) || user?.rol}
                     </span>
-                    <span className="hidden text-xs text-slate-400 sm:inline">{user.nivel}</span>
+                    <span className="hidden text-xs text-slate-400 sm:inline">{user?.rol}</span>
                   </div>
                 </Campo>
               </div>
             </div>
           </section>
 
-          {/* ── Contraseña ── */}
           <section className="py-8">
             <h2 className="text-base font-semibold text-slate-900">Cambiar Contraseña de Acceso</h2>
             <p className="mt-2 text-xs text-slate-500">Déjelo en blanco si no desea cambiarla. {REGLA_PASSWORD}</p>
@@ -206,7 +233,6 @@ function PerfilForm() {
           </section>
         </div>
 
-        {/* ── Pie ── */}
         <div className="flex flex-col-reverse gap-3 border-t border-line px-6 py-6 sm:flex-row sm:justify-end sm:px-8">
           <button type="button" onClick={cancelar} disabled={!hayCambios || guardando} className="btn-secondary h-11 px-5 font-semibold text-slate-900">
             Cancelar
@@ -258,7 +284,6 @@ function Error({ texto }) {
   )
 }
 
-/** Campo de solo lectura con candado (y flecha si representa un selector) */
 function Bloqueado({ id, valor, desplegable = false }) {
   return (
     <div
