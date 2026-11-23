@@ -60,6 +60,7 @@ export default function SeguimientoTicket() {
 function Seguimiento({ oficio, user, role }) {
   const { finalizarOficio } = useOficios()
   const idReal = oficio.idTicket || oficio.id
+  const folioVisible = oficio.folio || `#${idReal}`
 
   const [mensajes, setMensajes] = useState([])
   const [evidencias, setEvidencias] = useState([])
@@ -357,12 +358,11 @@ function Seguimiento({ oficio, user, role }) {
       </p>
 
       <div className="mt-8 grid items-start gap-6 lg:grid-cols-[minmax(0,1fr)_336px]">
-        {/* Columna principal */}
         <div className="min-w-0 space-y-4">
           <div className="card p-6">
             <div className="flex flex-wrap items-center justify-between gap-3">
-              <span className="min-w-[150px] rounded-md border border-line bg-slate-50 px-2 py-1 text-xs font-medium text-slate-600">
-                #{idReal}
+              <span className="min-w-[150px] rounded-md border border-line bg-slate-50 px-2.5 py-1 text-xs font-semibold text-slate-700">
+                {folioVisible}
               </span>
               <span className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-semibold ${ESTADO_TONOS[estado] || ESTADO_TONOS.PENDIENTE}`}>
                 <span className="h-1.5 w-1.5 rounded-full bg-current" aria-hidden="true" />
@@ -370,7 +370,7 @@ function Seguimiento({ oficio, user, role }) {
               </span>
             </div>
             <h2 className="mt-4 text-xl text-slate-900 sm:text-[22px]">
-              Folio #{idReal}: {oficio.titulo || oficio.asunto}
+              Folio {folioVisible}: {oficio.titulo || oficio.asunto}
             </h2>
             <p className="mt-4 text-sm text-slate-600 whitespace-pre-line bg-slate-50 p-4 rounded-lg border border-line">
               {oficio.descripcion}
@@ -629,7 +629,7 @@ function Seguimiento({ oficio, user, role }) {
           </>
         }>
         <p className="text-sm text-slate-600">
-          El oficio <span className="font-semibold text-slate-900">#{idReal}</span> se marcará como resuelto y la conversación quedará cerrada.
+          El oficio <span className="font-semibold text-slate-900">{folioVisible}</span> se marcará como resuelto y la conversación quedará cerrada.
         </p>
       </Modal>
 

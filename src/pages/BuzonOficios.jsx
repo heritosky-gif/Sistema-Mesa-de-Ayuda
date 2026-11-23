@@ -17,10 +17,6 @@ import {
 import { useAuth } from '../context/AuthContext'
 import {
   ESTADO_LABELS,
-  ESTADOS_EN_SEGUIMIENTO,
-  ESTADOS_OFICIO,
-  ESTADOS_PENDIENTES,
-  FECHA_ACTUAL,
   PRIORIDAD_LABELS,
   PRIORIDADES,
 } from '../data/mockData'
@@ -39,8 +35,8 @@ const esResuelta = (o) => ['RESUELTO', 'RESUELTA', 'FINALIZADO', 'CERRADO'].incl
 
 const TABS = [
   { id: 'todas', label: 'Todas las solicitudes', match: () => true },
-  { id: 'seguimiento', label: 'En seguimiento',match: (o) => ['EN_PROCESO', 'ASIGNADO', 'EN_ATENCION'].includes(getEstado(o))},
-  { id: 'pendientes', label: 'Pendientes',match: (o) => ['PENDIENTE', 'ABIERTO', 'NUEVO', 'SIN_ASIGNAR'].includes(getEstado(o))},
+  { id: 'seguimiento', label: 'En seguimiento', match: (o) => ['EN_PROCESO', 'ASIGNADO', 'EN_ATENCION'].includes(getEstado(o)) },
+  { id: 'pendientes', label: 'Pendientes', match: (o) => ['PENDIENTE', 'ABIERTO', 'NUEVO', 'SIN_ASIGNAR'].includes(getEstado(o)) },
   { id: 'resueltas', label: 'Resueltas', match: esResuelta },
 ]
 
@@ -48,6 +44,17 @@ const nombreCategoria = (o) =>
   typeof o.categoria === 'object'
     ? o.categoria?.nombre || 'Sin categoría'
     : o.categoriaString || o.categoria || 'Sin categoría'
+
+const normalizarFecha = (fecha) => {
+  if (!fecha) return null
+  if (typeof fecha === 'string') return fecha
+  if (typeof fecha === 'number') return new Date(fecha).toISOString()
+  if (Array.isArray(fecha)) {
+    const [y, M, d, h = 0, mnt = 0, s = 0] = fecha
+    return new Date(y, M - 1, d, h, mnt, s).toISOString()
+  }
+  return null
+}
 
 // Búsqueda sin distinguir mayúsculas ni acentos
 const normalizar = (s) =>
@@ -96,7 +103,7 @@ export default function BuzonOficios() {
       if (!q) return true
 
       const areaObj = areas.find((a) => (a.idArea || a.id) == areaId)
-      return [o.idTicket || o.folio, o.titulo || o.asunto, nombreCategoria(o), areaObj?.nombre].some((v) =>
+      return [o.folio, o.idTicket, o.titulo || o.asunto, nombreCategoria(o), o.area?.nombre || areaObj?.nombre].some((v) =>
         normalizar(v).includes(q)
       )
     })
@@ -109,8 +116,8 @@ export default function BuzonOficios() {
     return filtrados
       .filter(t.match)
       .sort((a, b) => {
-        const fechaA = a.fechaCreacion || ''
-        const fechaB = b.fechaCreacion || ''
+        const fechaA = normalizarFecha(a.fechaCreacion) || ''
+        const fechaB = normalizarFecha(b.fechaCreacion) || ''
         return (
           esResuelta(a) - esResuelta(b) ||
           (orden === 'desc'
@@ -135,20 +142,28 @@ export default function BuzonOficios() {
     setPagina(1)
   }
 
-  const exportar = () =>
+  const exportar = () => {
+    const hoy = new Date()
     exportCsv(
-      `buzon-oficios-${FECHA_ACTUAL.toISOString().slice(0, 10)}.csv`,
+      `buzon-oficios-${hoy.toISOString().slice(0, 10)}.csv`,
       [
-        { header: 'Folio', value: (o) => o.idTicket || o.folio },
+        { header: 'Folio', value: (o) => o.folio || `#${o.idTicket || o.id}` },
         { header: 'Categoría', value: (o) => nombreCategoria(o) },
         { header: 'Asunto', value: (o) => o.titulo || o.asunto },
-        { header: 'Área', value: (o) => o.area?.nombre || 'Sin Área' },
-        { header: 'Recibida', value: (o) => `${formatFechaCorta(o.fechaCreacion)} ${formatHora12(o.fechaCreacion)}` },
-        { header: 'Prioridad', value: (o) => PRIORIDAD_LABELS[o.prioridad] },
-        { header: 'Estado', value: (o) => ESTADO_LABELS[o.estatus || o.estado] },
+        { header: 'Área', value: (o) => o.area?.nombre || 'Por asignar' },
+        {
+          header: 'Recibida',
+          value: (o) => {
+            const f = normalizarFecha(o.fechaCreacion)
+            return f ? `${formatFechaCorta(f)} ${formatHora12(f)}` : 'Sin fecha'
+          },
+        },
+        { header: 'Prioridad', value: (o) => PRIORIDAD_LABELS[o.prioridad] || o.prioridad },
+        { header: 'Estado', value: (o) => ESTADO_LABELS[o.estatus || o.estado] || o.estatus || o.estado },
       ],
       lista
     )
+  }
 
   return (
     <>
@@ -204,7 +219,7 @@ export default function BuzonOficios() {
         >
           <span className="flex items-center gap-2">
             <CircleCheck size={17} className="shrink-0" />
-            El oficio <span className="font-semibold">#{creado.idTicket || creado.folio}</span> se emitió y envió correctamente.
+            El oficio <span className="font-semibold">{creado.folio || `#${creado.idTicket || creado.id}`}</span> se emitió y envió correctamente.
           </span>
           <div className="flex items-center gap-4">
             <Link to={`/oficios/${creado.idTicket || creado.id}`} className="font-semibold hover:underline">
@@ -229,7 +244,7 @@ export default function BuzonOficios() {
         <div className="flex flex-wrap items-center gap-5">
           <p className="flex items-center gap-2 text-xs text-slate-500">
             <RefreshCw size={14} />
-            Actualizado hoy, {formatHora12(FECHA_ACTUAL)}
+            Actualizado hoy, {formatHora12(new Date())}
           </p>
           {can('crear_oficio') && (
             <Link to="/oficios/nuevo" className="btn-primary">
@@ -301,12 +316,13 @@ export default function BuzonOficios() {
             <tbody className="divide-y divide-line">
               {paginaItems.map((o) => {
                 const uniqueKey = o.idTicket || o.id || Math.random()
+                const fechaNorm = normalizarFecha(o.fechaCreacion)
 
                 return (
                   <tr key={uniqueKey} className="transition-colors hover:bg-slate-50/60">
                     <td className="px-6 py-5">
-                      <span className="inline-block whitespace-nowrap rounded-md border border-line bg-slate-50 px-2 py-1 text-xs font-medium text-slate-600">
-                        #{o.idTicket || o.folio}
+                      <span className="inline-block whitespace-nowrap rounded-md border border-line bg-slate-50 px-2.5 py-1 text-xs font-semibold text-slate-700">
+                        {o.folio || `#${o.idTicket || o.id}`}
                       </span>
                       {esResuelta(o) && (
                         <span className="mt-2 flex w-fit items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 text-[11px] font-semibold text-emerald-700 ring-1 ring-inset ring-emerald-200/70">
@@ -319,11 +335,11 @@ export default function BuzonOficios() {
                       <p className="mt-1 text-sm font-semibold text-slate-900">{o.titulo || o.asunto}</p>
                     </td>
                     <td className="px-6 py-5">
-                      <p className="text-sm text-slate-800">{o.area?.nombre || 'Sin Área'}</p>
+                      <p className="text-sm text-slate-800">{o.area?.nombre || 'Por asignar'}</p>
                     </td>
                     <td className="whitespace-nowrap px-6 py-5">
-                      <p className="text-sm text-slate-800">{formatHora12(o.fechaCreacion)}</p>
-                      <p className="mt-1 text-xs text-slate-500">{formatFechaCorta(o.fechaCreacion)}</p>
+                      <p className="text-sm text-slate-800">{fechaNorm ? formatHora12(fechaNorm) : '—'}</p>
+                      <p className="mt-1 text-xs text-slate-500">{fechaNorm ? formatFechaCorta(fechaNorm) : 'Sin fecha'}</p>
                     </td>
                     <td className="px-6 py-5">
                       <PriorityBadge prioridad={o.prioridad} />

@@ -93,10 +93,8 @@ export default function Dashboard() {
     return () => clearInterval(timer)
   }, [])
 
-  // Procesamos solo los tickets que este rol tiene permitido ver
   const m = useMemo(() => calcularMetricas(filterOficios(oficios)), [filterOficios, oficios])
 
-  // Subtítulo dinámico dependiendo del rol
   const rolUsuario = String(user?.rol || '').toUpperCase()
   const alcance = {
     'ADMIN': 'en todo el sistema',
@@ -129,7 +127,6 @@ export default function Dashboard() {
 
   return (
     <div className="space-y-5">
-      {/* Encabezado */}
       <div className="flex flex-wrap items-center justify-between gap-3 pb-1">
         <h1 className="text-2xl font-semibold tracking-tight text-slate-900">Panel de control</h1>
         <p className="flex items-center gap-2 text-sm text-slate-500">
@@ -225,10 +222,10 @@ export default function Dashboard() {
                     className="cursor-pointer transition-colors hover:bg-slate-50"
                   >
                     <td className="px-5 py-3">
-                      <p className="text-xs font-semibold text-primary">#{idReal || o.folio}</p>
+                      <p className="text-xs font-semibold text-primary">{o.folio || `#${idReal}`}</p>
                       <p className="mt-0.5 text-sm text-slate-800">{o.titulo || o.asunto}</p>
                     </td>
-                    <td className="px-5 py-3 text-sm text-slate-500">{o.area?.nombre || 'Sin Área'}</td>
+                    <td className="px-5 py-3 text-sm text-slate-500">{o.area?.nombre || 'Por asignar'}</td>
                     <td className="px-5 py-3">
                       <StatusBadge estado={o.estatus || o.estado} />
                     </td>
