@@ -15,10 +15,8 @@ import {
   X,
 } from 'lucide-react'
 import { useAuth } from '../context/AuthContext'
-import { useOficios } from '../context/oficiosContext'
-import { useInstitucion } from '../context/institucionContext'
+import axiosClient from '../api/axiosClient'
 import useNotificaciones, { TIPOS_NOTIFICACION } from '../hooks/useNotificaciones'
-import { ESTADOS_OFICIO, ESTADO_LABELS, FECHA_ACTUAL, getReceptor } from '../data/mockData'
 import Avatar from '../components/Avatar'
 import { formatFechaLarga, formatHora12, mismoDia } from '../utils/fechas'
 
@@ -40,38 +38,42 @@ const FILTROS_FECHA = [
 ]
 
 const PRIORIDAD = {
-  alta: { texto: 'Alta / Prioritaria', clase: 'bg-primary-soft text-primary' },
-  media: { texto: 'Media', clase: 'bg-amber-50 text-amber-700' },
-  baja: { texto: 'Baja', clase: 'bg-slate-100 text-slate-600' },
+  ALTA: { texto: 'Alta / Prioritaria', clase: 'bg-primary-soft text-primary' },
+  CRITICA: { texto: 'Crítica', clase: 'bg-rose-50 text-rose-700' },
+  MEDIA: { texto: 'Media', clase: 'bg-amber-50 text-amber-700' },
+  BAJA: { texto: 'Baja', clase: 'bg-slate-100 text-slate-600' },
 }
 
 const MESES = ['ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sep', 'oct', 'nov', 'dic']
+const DIAS_SEMANA = ['Domingo', 'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado']
 const DIA_MS = 864e5
 
-// "Hace 12 min" · "Hoy, 11:45 AM" · "Ayer, 09:15 AM" · "07 oct, 04:30 PM"
 function tiempoRelativo(fecha) {
+  const ahora = new Date()
   const d = new Date(fecha)
-  const minutos = Math.round((FECHA_ACTUAL - d) / 60000)
+  const minutos = Math.round((ahora - d) / 60000)
   if (minutos < 1) return 'Hace un momento'
   if (minutos < 60) return `Hace ${minutos} min`
-  if (mismoDia(d, FECHA_ACTUAL)) return `Hoy, ${formatHora12(d)}`
-  if (mismoDia(d, FECHA_ACTUAL.getTime() - DIA_MS)) return `Ayer, ${formatHora12(d)}`
+  if (mismoDia(d, ahora)) return `Hoy, ${formatHora12(d)}`
+  if (mismoDia(d, ahora.getTime() - DIA_MS)) return `Ayer, ${formatHora12(d)}`
   return `${String(d.getDate()).padStart(2, '0')} ${MESES[d.getMonth()]}, ${formatHora12(d)}`
 }
 
-const DIAS_SEMANA = ['Domingo', 'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado']
-
 function etiquetaDia(dia) {
+  const ahora = new Date()
   const d = new Date(`${dia}T12:00:00`)
-  if (mismoDia(d, FECHA_ACTUAL)) return 'Hoy'
-  if (mismoDia(d, FECHA_ACTUAL.getTime() - DIA_MS)) return 'Ayer'
+  if (mismoDia(d, ahora)) return 'Hoy'
+  if (mismoDia(d, ahora.getTime() - DIA_MS)) return 'Ayer'
   return DIAS_SEMANA[d.getDay()]
+}
+
+const esTicketResuelto = (o) => {
+  const e = String(o?.estatus || o?.estado || '').toUpperCase()
+  return ['RESUELTO', 'RESUELTA', 'FINALIZADO', 'CERRADO'].includes(e)
 }
 
 export default function Notificaciones() {
   const { user } = useAuth()
-  const { agregarMensaje, getMensajes } = useOficios()
-  const { getUsuario, getDependencia } = useInstitucion()
   const { notificaciones, noLeidas, marcarLeidas } = useNotificaciones()
 
   const [tab, setTab] = useState('todas')
@@ -79,7 +81,8 @@ export default function Notificaciones() {
   const [verTodas, setVerTodas] = useState(false)
   const [seleccionId, setSeleccionId] = useState(null)
   const [texto, setTexto] = useState('')
-  const [archivos, setArchivos] = useState([])
+  const [archivoAdjunto, setArchivoAdjunto] = useState(null)
+  const [enviando, setEnviando] = useState(false)
   const [aviso, setAviso] = useState(null)
   const fileInput = useRef(null)
   const textareaRef = useRef(null)
@@ -90,11 +93,10 @@ export default function Notificaciones() {
     return () => clearTimeout(t)
   }, [aviso])
 
-  // Filtro de fecha (antes de las pestañas, para que los contadores respondan)
   const porFecha = useMemo(() => {
     const dias = FILTROS_FECHA.find((f) => f.value === filtroFecha).dias
     if (!dias) return notificaciones
-    const inicio = new Date(FECHA_ACTUAL)
+    const inicio = new Date()
     inicio.setHours(0, 0, 0, 0)
     inicio.setDate(inicio.getDate() - (dias - 1))
     return notificaciones.filter((n) => new Date(n.fecha) >= inicio)
@@ -104,7 +106,6 @@ export default function Notificaciones() {
   const lista = porFecha.filter(TABS.find((t) => t.id === tab).match)
   const visibles = verTodas ? lista : lista.slice(0, POR_PAGINA)
 
-  // Agrupar por día para los encabezados "Hoy", "Ayer"…
   const grupos = visibles.reduce((acc, n) => {
     const dia = n.fecha.slice(0, 10)
     const ultimo = acc.at(-1)
@@ -113,7 +114,6 @@ export default function Notificaciones() {
     return acc
   }, [])
 
-  // Mensaje en el panel de respuesta rápida: el elegido o, por defecto, el más reciente
   const mensajesPendientes = notificaciones.filter((n) => n.tipo === TIPOS_NOTIFICACION.MENSAJE)
   const seleccion = mensajesPendientes.find((n) => n.id === seleccionId) ?? mensajesPendientes[0] ?? null
 
@@ -128,37 +128,55 @@ export default function Notificaciones() {
     requestAnimationFrame(() => textareaRef.current?.focus())
   }
 
-  const enviarRespuesta = () => {
-    if (!seleccion || (!texto.trim() && archivos.length === 0)) return
+  const enviarRespuesta = async () => {
+    if (!seleccion || (!texto.trim() && !archivoAdjunto)) return
     const { oficio } = seleccion
-    const ultimo = getMensajes(oficio.id).at(-1)
-    const base = Math.max(FECHA_ACTUAL.getTime(), new Date(ultimo?.fecha ?? FECHA_ACTUAL).getTime() + 60000)
-    const d = new Date(base)
-    const p = (x) => String(x).padStart(2, '0')
-    agregarMensaje(oficio.id, {
-      fecha: `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}:00`,
-      autorId: user.id,
-      lado: user.id === oficio.creadoPorId ? 'emisor' : 'receptor',
-      texto: texto.trim(),
-      adjuntos: archivos.map((f) => ({
-        nombre: f.name,
-        tipo: f.name.split('.').pop().toLowerCase().slice(0, 4),
-        bytes: f.size,
-      })),
-    })
-    marcarLeidas([seleccion.id])
-    setAviso({ texto: `Respuesta enviada en el folio #${oficio.folio}.`, oficioId: oficio.id })
-    setTexto('')
-    setArchivos([])
-    setSeleccionId(null)
+    const idTicket = oficio.idTicket || oficio.id
+    const folio = oficio.folio || `#${idTicket}`
+
+    setEnviando(true)
+    try {
+      let archivoUrl = null
+      let archivoNombre = null
+
+      if (archivoAdjunto) {
+        const formData = new FormData()
+        formData.append('archivo', archivoAdjunto)
+        const resArchivo = await axiosClient.post('/api/archivos/subir', formData, {
+          headers: { 'Content-Type': undefined },
+        })
+        archivoUrl = resArchivo.data.url
+        archivoNombre = resArchivo.data.nombre
+      }
+
+      const payload = {
+        texto: texto.trim(),
+        autor: { idUsuario: user.idUsuario || user.id },
+        archivoUrl,
+        archivoNombre,
+      }
+
+      await axiosClient.post(`/api/comentarios/ticket/${idTicket}`, payload)
+      marcarLeidas([seleccion.id])
+      setAviso({ texto: `Respuesta enviada en el folio ${folio}.`, oficioId: idTicket })
+      setTexto('')
+      setArchivoAdjunto(null)
+      if (fileInput.current) fileInput.current.value = ''
+      setSeleccionId(null)
+    } catch (error) {
+      console.error('Error al enviar respuesta rápida:', error)
+      setAviso({ texto: 'No se pudo enviar la respuesta. Intente de nuevo.', oficioId: idTicket })
+    } finally {
+      setEnviando(false)
+    }
   }
 
-  const autorSeleccion = seleccion ? getUsuario(seleccion.mensaje.autorId) : null
-  const resueltaSeleccion = seleccion?.oficio.estado === ESTADOS_OFICIO.RESUELTA
+  const autorSeleccion = seleccion?.mensaje?.autor || null
+  const nombreAutorSeleccion = autorSeleccion?.nombreCompleto || autorSeleccion?.nombre || 'Usuario'
+  const resueltaSeleccion = seleccion ? esTicketResuelto(seleccion.oficio) : false
 
   return (
     <>
-      {/* Encabezado */}
       <h1 className="text-[28px] font-bold leading-tight tracking-tight text-slate-900 sm:text-[30px]">
         Centro de Notificaciones y Mensajes
       </h1>
@@ -171,7 +189,9 @@ export default function Notificaciones() {
           <Radio size={15} className="text-emerald-600" />
           En tiempo real · Actualizado hace un momento
           {noLeidas > 0 && (
-            <span className="rounded-full bg-primary px-2 py-0.5 text-[11px] font-semibold text-white">{noLeidas} sin leer</span>
+            <span className="rounded-full bg-primary px-2 py-0.5 text-[11px] font-semibold text-white">
+              {noLeidas} sin leer
+            </span>
           )}
         </p>
         <div className="flex flex-wrap gap-3">
@@ -203,7 +223,6 @@ export default function Notificaciones() {
         </div>
       </div>
 
-      {/* Pestañas */}
       <div role="tablist" className="mt-6 flex gap-8 overflow-x-auto border-b border-line">
         {TABS.map((t) => {
           const activa = tab === t.id
@@ -224,7 +243,6 @@ export default function Notificaciones() {
       </div>
 
       <div className="mt-6 grid items-start gap-6 lg:grid-cols-[minmax(0,1fr)_388px]">
-        {/* ── Listado ── */}
         <div className="min-w-0">
           <h2 className="text-lg font-semibold text-slate-900">Alertas de Solicitudes y Mensajes Recientes</h2>
 
@@ -239,8 +257,6 @@ export default function Notificaciones() {
                   <Tarjeta
                     key={n.id}
                     n={n}
-                    getUsuario={getUsuario}
-                    getDependencia={getDependencia}
                     onLeer={() => marcarLeidas([n.id])}
                     onResponder={() => responder(n)}
                     seleccionada={seleccion?.id === n.id}
@@ -275,7 +291,6 @@ export default function Notificaciones() {
           )}
         </div>
 
-        {/* ── Respuesta rápida ── */}
         <aside className="lg:sticky lg:top-24">
           <h2 className="text-lg font-semibold text-slate-900">Resumen de Actividad &amp; Respuestas Rápidas</h2>
           <div className="card mt-5 p-6">
@@ -293,14 +308,16 @@ export default function Notificaciones() {
                   <div className="flex items-center justify-between gap-2">
                     <span className="text-[11px] text-slate-500">En respuesta a</span>
                     <Link
-                      to={`/oficios/${seleccion.oficio.id}`}
+                      to={`/oficios/${seleccion.oficio.idTicket || seleccion.oficio.id}`}
                       className="rounded-md border border-line bg-white px-2 py-1 text-[11px] font-semibold text-primary hover:border-primary/40"
                     >
-                      #{seleccion.oficio.folio}
+                      {seleccion.oficio.folio || `#${seleccion.oficio.idTicket || seleccion.oficio.id}`}
                     </Link>
                   </div>
-                  <p className="mt-2 text-sm font-medium text-slate-900">{autorSeleccion?.nombre}</p>
-                  <p className="mt-0.5 text-[11px] text-slate-500">{getDependencia(autorSeleccion?.dependenciaId)?.nombre}</p>
+                  <p className="mt-2 text-sm font-medium text-slate-900">{nombreAutorSeleccion}</p>
+                  <p className="mt-0.5 text-[11px] text-slate-500">
+                    {seleccion.oficio.area?.nombre || 'Mesa de Ayuda'}
+                  </p>
                 </div>
 
                 {resueltaSeleccion ? (
@@ -318,27 +335,28 @@ export default function Notificaciones() {
                         onKeyDown={(e) => (e.ctrlKey || e.metaKey) && e.key === 'Enter' && enviarRespuesta()}
                         rows={4}
                         placeholder="Escriba su respuesta…"
-                        aria-label={`Respuesta para ${autorSeleccion?.nombre}`}
+                        aria-label={`Respuesta para ${nombreAutorSeleccion}`}
                         className="block w-full resize-none rounded-t-lg bg-transparent px-3 pt-3 text-sm text-slate-800 placeholder:text-slate-400 focus:outline-none"
                       />
-                      {archivos.length > 0 && (
-                        <ul className="flex flex-wrap gap-1.5 px-3 pt-2">
-                          {archivos.map((f, i) => (
-                            <li key={`${f.name}-${i}`} className="flex items-center gap-1 rounded bg-slate-100 py-0.5 pl-2 pr-1 text-[11px] text-slate-600">
-                              {f.name}
-                              <button
-                                onClick={() => setArchivos((prev) => prev.filter((_, j) => j !== i))}
-                                className="rounded p-0.5 hover:bg-slate-200"
-                                aria-label={`Quitar ${f.name}`}
-                              >
-                                <X size={11} />
-                              </button>
-                            </li>
-                          ))}
-                        </ul>
+                      {archivoAdjunto && (
+                        <div className="mx-3 mt-1 flex items-center justify-between rounded bg-slate-100 py-1 pl-2 pr-1 text-[11px] text-slate-600">
+                          <span className="truncate">{archivoAdjunto.name}</span>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setArchivoAdjunto(null)
+                              if (fileInput.current) fileInput.current.value = ''
+                            }}
+                            className="rounded p-0.5 hover:bg-slate-200"
+                            aria-label="Quitar archivo"
+                          >
+                            <X size={11} />
+                          </button>
+                        </div>
                       )}
                       <div className="flex items-center justify-between px-3 pb-2.5 pt-1">
                         <button
+                          type="button"
                           onClick={() => fileInput.current?.click()}
                           className="rounded p-1 text-slate-500 hover:bg-slate-100"
                           aria-label="Adjuntar archivo"
@@ -351,21 +369,18 @@ export default function Notificaciones() {
                         <input
                           ref={fileInput}
                           type="file"
-                          multiple
+                          accept=".pdf,.png,.jpg,.jpeg,.docx"
                           hidden
-                          onChange={(e) => {
-                            setArchivos((prev) => [...prev, ...e.target.files])
-                            e.target.value = ''
-                          }}
+                          onChange={(e) => setArchivoAdjunto(e.target.files?.[0] || null)}
                         />
                       </div>
                     </div>
                     <button
                       onClick={enviarRespuesta}
-                      disabled={!texto.trim() && archivos.length === 0}
-                      className="btn-primary mt-4 h-11 w-full font-semibold"
+                      disabled={enviando || (!texto.trim() && !archivoAdjunto)}
+                      className="btn-primary mt-4 h-11 w-full font-semibold disabled:opacity-50"
                     >
-                      Enviar respuesta <ArrowRight size={16} />
+                      {enviando ? 'Enviando...' : <>Enviar respuesta <ArrowRight size={16} /></>}
                     </button>
                   </>
                 )}
@@ -391,16 +406,24 @@ export default function Notificaciones() {
   )
 }
 
-function Tarjeta({ n, getUsuario, getDependencia, onLeer, onResponder, seleccionada }) {
+function Tarjeta({ n, onLeer, onResponder, seleccionada }) {
   const o = n.oficio
+  const idTicket = o.idTicket || o.id
+  const folio = o.folio || `#${idTicket}`
+  const asunto = o.titulo || o.asunto || 'Sin asunto'
+  const areaNombre = o.area?.nombre || 'Por asignar'
+
   const base = `card relative overflow-hidden p-6 transition-shadow ${n.leida ? '' : 'shadow-sm'} ${
     seleccionada ? 'ring-2 ring-primary/20' : ''
   }`
   const marcaNoLeida = !n.leida && <span className="absolute inset-y-0 left-0 w-[3px] bg-primary" aria-hidden="true" />
 
   if (n.tipo === TIPOS_NOTIFICACION.MENSAJE) {
-    const autor = getUsuario(n.mensaje.autorId)
-    const prioridad = PRIORIDAD[o.prioridad] ?? PRIORIDAD.baja
+    const autor = n.mensaje?.autor || {}
+    const nombreAutor = autor.nombreCompleto || autor.nombre || 'Usuario'
+    const prioridadKey = String(o.prioridad || 'BAJA').toUpperCase()
+    const prioridad = PRIORIDAD[prioridadKey] ?? PRIORIDAD.BAJA
+
     return (
       <article className={base} onClick={onLeer}>
         {marcaNoLeida}
@@ -411,14 +434,14 @@ function Tarjeta({ n, getUsuario, getDependencia, onLeer, onResponder, seleccion
           fecha={n.fecha}
         />
         <div className="mt-4 flex gap-4">
-          <Avatar name={autor?.nombre} src={autor?.foto} size="md" square />
+          <Avatar name={nombreAutor} src={autor.foto} size="md" square />
           <div className="min-w-0 flex-1">
-            <p className="text-base font-semibold text-slate-900">Mensaje de seguimiento en Folio #{o.folio}</p>
+            <p className="text-base font-semibold text-slate-900">Mensaje de seguimiento en Folio {folio}</p>
             <p className="mt-1 text-[11px] text-slate-500">
-              {autor?.nombre} ({getDependencia(autor?.dependenciaId)?.nombre})
+              {nombreAutor} ({areaNombre})
             </p>
             <p className="mt-2 line-clamp-2 text-sm text-slate-700">
-              {n.mensaje.texto || `Adjuntó ${n.mensaje.adjuntos.length} archivo(s).`}
+              {n.mensaje.texto || (n.mensaje.archivoNombre ? `Adjuntó el archivo: ${n.mensaje.archivoNombre}` : 'Nuevo mensaje')}
             </p>
             <span className={`mt-3 inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-semibold ${prioridad.clase}`}>
               <span className="h-1.5 w-1.5 rounded-full bg-current" /> {prioridad.texto}
@@ -434,7 +457,7 @@ function Tarjeta({ n, getUsuario, getDependencia, onLeer, onResponder, seleccion
                 Responder mensaje <ArrowRight size={15} />
               </button>
               <Link
-                to={`/oficios/${o.id}`}
+                to={`/oficios/${idTicket}`}
                 onClick={onLeer}
                 className="inline-flex items-center gap-1 text-sm font-semibold text-primary hover:underline"
               >
@@ -447,7 +470,6 @@ function Tarjeta({ n, getUsuario, getDependencia, onLeer, onResponder, seleccion
     )
   }
 
-  // Cambio de estatus / nueva solicitud / alerta SLA: misma estructura con distinto tono
   let config
   if (n.tipo === TIPOS_NOTIFICACION.SLA) {
     const h = Math.round(Math.abs(n.horasRestantes))
@@ -459,9 +481,9 @@ function Tarjeta({ n, getUsuario, getDependencia, onLeer, onResponder, seleccion
       caja: 'bg-amber-50 text-amber-600',
       texto:
         n.horasRestantes >= 0
-          ? `Atención requerida: El folio #${o.folio} (${o.asunto}) está a ${plazo} de alcanzar el límite de atención (SLA).`
-          : `Atención requerida: El folio #${o.folio} (${o.asunto}) superó su límite de atención (SLA) hace ${plazo}.`,
-      detalle: getReceptor(o, getDependencia),
+          ? `Atención requerida: El folio ${folio} (${asunto}) está a ${plazo} de alcanzar el límite de atención (SLA).`
+          : `Atención requerida: El folio ${folio} (${asunto}) superó su límite de atención (SLA) hace ${plazo}.`,
+      detalle: `Área: ${areaNombre}`,
       badge: { texto: 'Atención Inmediata', clase: 'bg-amber-50 text-amber-700' },
     }
   } else if (n.subtipo === 'resuelta') {
@@ -470,9 +492,9 @@ function Tarjeta({ n, getUsuario, getDependencia, onLeer, onResponder, seleccion
       titulo: 'Cambio de Estatus de Solicitud',
       icono: FileCheck,
       caja: 'bg-emerald-50 text-emerald-600',
-      texto: `El oficio #${o.folio} (${o.asunto}) ha cambiado a estatus RESUELTA por la ${getReceptor(o, getDependencia)}.`,
-      detalle: getDependencia(o.dependenciaId)?.nombre,
-      badge: { texto: 'Resuelta / Aceptada', clase: 'bg-emerald-50 text-emerald-700' },
+      texto: `El oficio ${folio} (${asunto}) ha cambiado a estatus RESUELTO (${areaNombre}).`,
+      detalle: `Solicitante: ${o.solicitante?.nombreCompleto || 'Usuario'}`,
+      badge: { texto: 'Resuelto', clase: 'bg-emerald-50 text-emerald-700' },
     }
   } else {
     config = {
@@ -480,15 +502,15 @@ function Tarjeta({ n, getUsuario, getDependencia, onLeer, onResponder, seleccion
       titulo: 'Nueva Solicitud Recibida',
       icono: FilePlus,
       caja: 'bg-primary-soft text-primary',
-      texto: `Se registró el oficio #${o.folio} (${o.asunto}), dirigido a la ${getReceptor(o, getDependencia)}.`,
-      detalle: getDependencia(o.dependenciaId)?.nombre,
-      badge: { texto: ESTADO_LABELS[o.estado], clase: 'bg-slate-100 text-slate-600' },
+      texto: `Se registró el oficio ${folio} (${asunto}), área: ${areaNombre}.`,
+      detalle: `Solicitante: ${o.solicitante?.nombreCompleto || 'Usuario'}`,
+      badge: { texto: String(o.estatus || o.estado || 'NUEVO').toUpperCase(), clase: 'bg-slate-100 text-slate-600' },
     }
   }
   const Icono = config.icono
 
   return (
-    <Link to={`/oficios/${o.id}`} onClick={onLeer} className={`${base} group block hover:shadow-md`}>
+    <Link to={`/oficios/${idTicket}`} onClick={onLeer} className={`${base} group block hover:shadow-md`}>
       {marcaNoLeida}
       <Cabecera color={config.color} titulo={config.titulo} punto={!n.leida} fecha={n.fecha} />
       <div className="mt-4 flex gap-4">

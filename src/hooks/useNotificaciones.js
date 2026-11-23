@@ -1,7 +1,7 @@
-import { useCallback, useMemo } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useAuth } from '../context/AuthContext'
 import { useOficios } from '../context/oficiosContext'
-import { ESTADOS_OFICIO, FECHA_ACTUAL } from '../data/mockData'
+import axiosClient from '../api/axiosClient'
 
 export const TIPOS_NOTIFICACION = {
   MENSAJE: 'mensaje',
@@ -9,88 +9,194 @@ export const TIPOS_NOTIFICACION = {
   SLA: 'sla',
 }
 
-// Cuántas notificaciones recientes se conservan por tipo (como en el diseño: 5 + 4 + 3)
-const LIMITES = { solicitud: 5, mensaje: 4, sla: 3 }
-
+const LIMITES = { solicitud: 10, mensaje: 10, sla: 5 }
 const HORA = 36e5
-const iso = (ms) => {
-  const d = new Date(ms)
-  const p = (n) => String(n).padStart(2, '0')
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}:00`
+
+const normalizarFecha = (fecha) => {
+  if (!fecha) return null
+  if (typeof fecha === 'string') return fecha
+  if (typeof fecha === 'number') return new Date(fecha).toISOString()
+  if (Array.isArray(fecha)) {
+    const [y, M, d, h = 0, mnt = 0, s = 0] = fecha
+    return new Date(y, M - 1, d, h, mnt, s).toISOString()
+  }
+  return null
 }
 
-/**
- * Notificaciones del usuario actual, derivadas de los oficios que su rol puede ver:
- *  - mensaje:   último mensaje de una conversación escrito por otra persona
- *  - solicitud: oficio nuevo recibido (24 h) o resuelto recientemente (48 h)
- *  - sla:       oficio abierto que vence en menos de 24 h o que ya venció
- */
+const esResuelto = (o) => {
+  const e = String(o.estatus || o.estado || '').toUpperCase()
+  return ['RESUELTO', 'RESUELTA', 'FINALIZADO', 'CERRADO'].includes(e)
+}
+
+const leerStorage = (clave) => {
+  try {
+    return JSON.parse(localStorage.getItem(clave) || '[]')
+  } catch {
+    return []
+  }
+}
+
 export default function useNotificaciones() {
   const { user, filterOficios } = useAuth()
-  const { oficios, getMensajes, getLeidas, marcarLeidas } = useOficios()
+  const { oficios } = useOficios()
+
+  const userId = user?.idUsuario || user?.id
+  const claveStorage = `notificaciones_leidas_${userId}`
+
+  const [leidasLista, setLeidasLista] = useState(() => (userId ? leerStorage(claveStorage) : []))
+  const [ultimosMensajes, setUltimosMensajes] = useState({})
+
+  // Sincronizar leídas entre Header y Notificaciones
+  useEffect(() => {
+    if (!userId) return
+    setLeidasLista(leerStorage(claveStorage))
+
+    const sync = () => setLeidasLista(leerStorage(claveStorage))
+    window.addEventListener('notificaciones-actualizadas', sync)
+    return () => window.removeEventListener('notificaciones-actualizadas', sync)
+  }, [userId, claveStorage])
+
+  const visibles = useMemo(() => (user ? filterOficios(oficios) : []), [user, filterOficios, oficios])
+
+  // Cargar comentarios reales de los últimos 12 tickets visibles
+  useEffect(() => {
+    if (!userId || visibles.length === 0) return
+
+    let activo = true
+    const recientes = [...visibles]
+      .sort((a, b) => (normalizarFecha(b.fechaCreacion) || '').localeCompare(normalizarFecha(a.fechaCreacion) || ''))
+      .slice(0, 12)
+
+    Promise.all(
+      recientes.map((o) => {
+        const idTicket = o.idTicket || o.id
+        return axiosClient
+          .get(`/api/comentarios/ticket/${idTicket}`)
+          .then((res) => ({ idTicket, ultimo: Array.isArray(res.data) ? res.data.at(-1) : null }))
+          .catch(() => ({ idTicket, ultimo: null }))
+      })
+    ).then((resultados) => {
+      if (!activo) return
+      const mapa = {}
+      resultados.forEach(({ idTicket, ultimo }) => {
+        if (ultimo) mapa[String(idTicket)] = ultimo
+      })
+      setUltimosMensajes(mapa)
+    })
+
+    return () => {
+      activo = false
+    }
+  }, [userId, visibles])
 
   const notificaciones = useMemo(() => {
-    if (!user) return []
-    const ahora = FECHA_ACTUAL.getTime()
-    const visibles = filterOficios(oficios)
+    if (!userId) return []
+    const ahora = Date.now()
 
+    //Mensajes de seguimiento escritos por otra persona
     const mensajes = visibles
-      .map((o) => ({ o, m: getMensajes(o.id).at(-1) }))
-      .filter(({ m }) => m && m.autorId !== user.id)
+      .map((o) => {
+        const idTicket = o.idTicket || o.id
+        return { o, m: ultimosMensajes[String(idTicket)] }
+      })
+      .filter(({ m }) => {
+        if (!m) return false
+        const autorId = typeof m.autor === 'object' ? (m.autor?.idUsuario || m.autor?.id) : m.autor
+        return String(autorId) !== String(userId)
+      })
       .map(({ o, m }) => ({
-        id: `msg:${m.id}`,
+        id: `msg:${m.idComentario || m.id}`,
         tipo: TIPOS_NOTIFICACION.MENSAJE,
-        fecha: m.fecha,
+        fecha: normalizarFecha(m.fechaCreacion || m.fecha) || new Date().toISOString(),
         oficio: o,
         mensaje: m,
       }))
 
+    //Solicitudes nuevas (últimos 7 días) o resueltas
     const solicitudes = visibles.flatMap((o) => {
       const items = []
-      const creacion = new Date(o.fechaCreacion).getTime()
-      if (o.creadoPorId !== user.id && ahora - creacion <= 24 * HORA) {
-        items.push({ id: `new:${o.id}`, tipo: TIPOS_NOTIFICACION.SOLICITUD, subtipo: 'nueva', fecha: o.fechaCreacion, oficio: o })
+      const idTicket = o.idTicket || o.id
+      const fechaCreacion = normalizarFecha(o.fechaCreacion) || new Date().toISOString()
+      const creacionMs = new Date(fechaCreacion).getTime()
+      const solicitanteId = o.solicitante?.idUsuario || o.solicitante?.id || o.creadoPorId
+
+      if (String(solicitanteId) !== String(userId) && ahora - creacionMs <= 7 * 24 * HORA) {
+        items.push({
+          id: `new:${idTicket}`,
+          tipo: TIPOS_NOTIFICACION.SOLICITUD,
+          subtipo: 'nueva',
+          fecha: fechaCreacion,
+          oficio: o,
+        })
       }
-      if (o.estado === ESTADOS_OFICIO.RESUELTA && o.horasResolucion != null) {
-        const resuelta = Math.min(creacion + o.horasResolucion * HORA, ahora)
-        if (ahora - resuelta <= 48 * HORA) {
-          items.push({ id: `res:${o.id}`, tipo: TIPOS_NOTIFICACION.SOLICITUD, subtipo: 'resuelta', fecha: iso(resuelta), oficio: o })
-        }
+
+      if (esResuelto(o)) {
+        const fechaCierre = normalizarFecha(o.fechaCierre) || fechaCreacion
+        items.push({
+          id: `res:${idTicket}`,
+          tipo: TIPOS_NOTIFICACION.SOLICITUD,
+          subtipo: 'resuelta',
+          fecha: fechaCierre,
+          oficio: o,
+        })
       }
       return items
     })
 
+    //Alertas SLA: tickets abiertos con prioridad ALTA/CRITICA o con más de 24h abiertos
     const sla = visibles
-      .filter((o) => o.estado !== ESTADOS_OFICIO.RESUELTA)
-      .map((o) => ({ o, limite: new Date(o.fechaLimite).getTime() }))
-      .filter(({ limite }) => limite - ahora <= 24 * HORA && ahora - limite <= 48 * HORA)
-      .sort((a, b) => a.limite - b.limite)
-      .map(({ o, limite }) => ({
-        id: `sla:${o.id}`,
+      .filter((o) => !esResuelto(o))
+      .map((o) => {
+        const fechaCreacion = normalizarFecha(o.fechaCreacion) || new Date().toISOString()
+        const creacionMs = new Date(fechaCreacion).getTime()
+        const prioridad = String(o.prioridad || '').toUpperCase()
+        const horasLimite = prioridad === 'ALTA' || prioridad === 'CRITICA' ? 24 : 48
+        const limiteMs = creacionMs + horasLimite * HORA
+        const horasRestantes = (limiteMs - ahora) / HORA
+        return { o, fechaCreacion, prioridad, horasRestantes }
+      })
+      .filter(({ prioridad, horasRestantes }) => prioridad === 'ALTA' || prioridad === 'CRITICA' || horasRestantes <= 24)
+      .sort((a, b) => a.horasRestantes - b.horasRestantes)
+      .map(({ o, fechaCreacion, horasRestantes }) => ({
+        id: `sla:${o.idTicket || o.id}`,
         tipo: TIPOS_NOTIFICACION.SLA,
-        // La alerta se emite 24 h antes del límite (o al crearse el oficio, si fue después)
-        fecha: iso(Math.min(Math.max(limite - 24 * HORA, new Date(o.fechaCreacion).getTime()), ahora)),
+        fecha: fechaCreacion,
         oficio: o,
-        horasRestantes: (limite - ahora) / HORA,
+        horasRestantes,
       }))
 
-    const recientes = (lista, n) => [...lista].sort((a, b) => b.fecha.localeCompare(a.fecha)).slice(0, n)
+    const ordenarRecientes = (lista, limite) =>
+      [...lista].sort((a, b) => b.fecha.localeCompare(a.fecha)).slice(0, limite)
 
     return [
-      ...recientes(mensajes, LIMITES.mensaje),
-      ...recientes(solicitudes, LIMITES.solicitud),
+      ...ordenarRecientes(mensajes, LIMITES.mensaje),
+      ...ordenarRecientes(solicitudes, LIMITES.solicitud),
       ...sla.slice(0, LIMITES.sla),
     ].sort((a, b) => b.fecha.localeCompare(a.fecha))
-  }, [user, filterOficios, oficios, getMensajes])
+  }, [userId, visibles, ultimosMensajes])
 
-  const leidas = useMemo(() => new Set(user ? getLeidas(user.id) : []), [user, getLeidas])
-  const conEstado = useMemo(() => notificaciones.map((n) => ({ ...n, leida: leidas.has(n.id) })), [notificaciones, leidas])
+  const leidasSet = useMemo(() => new Set(leidasLista), [leidasLista])
+  const conEstado = useMemo(
+    () => notificaciones.map((n) => ({ ...n, leida: leidasSet.has(n.id) })),
+    [notificaciones, leidasSet]
+  )
 
-  const marcar = useCallback((ids) => user && marcarLeidas(user.id, ids), [user, marcarLeidas])
+  const marcarLeidas = useCallback(
+    (ids) => {
+      if (!userId || !ids?.length) return
+      const actuales = new Set(leerStorage(claveStorage))
+      ids.forEach((id) => actuales.add(id))
+      const nuevaLista = [...actuales]
+      localStorage.setItem(claveStorage, JSON.stringify(nuevaLista))
+      setLeidasLista(nuevaLista)
+      window.dispatchEvent(new Event('notificaciones-actualizadas'))
+    },
+    [userId, claveStorage]
+  )
 
   return {
     notificaciones: conEstado,
     noLeidas: conEstado.filter((n) => !n.leida).length,
-    marcarLeidas: marcar,
+    marcarLeidas,
   }
 }
