@@ -25,6 +25,7 @@ import { formatFechaLarga, formatFechaMensaje, formatFechaSlash } from '../utils
 const ESTADO_TONOS = {
   PENDIENTE: 'bg-rose-50 text-rose-700',
   EN_PROCESO: 'bg-amber-50 text-amber-700',
+  EN_PROGRESO: 'bg-amber-50 text-amber-700',
   RESUELTO: 'bg-emerald-50 text-emerald-700',
 }
 
@@ -62,6 +63,12 @@ function Seguimiento({ oficio, user, role }) {
   const idReal = oficio.idTicket || oficio.id
   const folioVisible = oficio.folio || `#${idReal}`
 
+  const rolActual = String(role || user?.rol || '').toUpperCase()
+  const esJefeArea = rolActual === 'JEFE_AREA'
+  const esIntermediario = rolActual === 'INTERMEDIARIO'
+  const esAdmin = rolActual === 'ADMIN' || rolActual === 'ADMINISTRADOR'
+  const miAreaId = user?.area?.idArea || user?.area?.id || ''
+
   const [mensajes, setMensajes] = useState([])
   const [evidencias, setEvidencias] = useState([])
   const [texto, setTexto] = useState('')
@@ -73,15 +80,15 @@ function Seguimiento({ oficio, user, role }) {
 
   const [areas, setAreas] = useState([])
   const [areaSeleccionada, setAreaSeleccionada] = useState(
-    oficio.area?.idArea || oficio.area?.id || ''
+    esJefeArea ? miAreaId : (oficio.area?.idArea || oficio.area?.id || '')
   )
   const [areaActual, setAreaActual] = useState(oficio.area || null)
 
-  const [todosTecnicos, setTodosTecnicos] = useState([])
-  const [tecnicoSeleccionado, setTecnicoSeleccionado] = useState(
+  const [candidatos, setCandidatos] = useState([])
+  const [responsableSeleccionado, setResponsableSeleccionado] = useState(
     oficio.tecnico?.idUsuario || oficio.tecnicoAsignado?.idUsuario || ''
   )
-  const [tecnicoActual, setTecnicoActual] = useState(
+  const [responsableActual, setResponsableActual] = useState(
     oficio.tecnico || oficio.tecnicoAsignado || null
   )
   const [asignando, setAsignando] = useState(false)
@@ -92,8 +99,8 @@ function Seguimiento({ oficio, user, role }) {
   const [estado, setEstado] = useState((oficio.estatus || oficio.estado || 'PENDIENTE').toUpperCase())
   const resuelta = estado === 'RESUELTO' || estado === 'FINALIZADO'
   const esPendiente = ['PENDIENTE', 'ABIERTO', 'NUEVO', 'SIN_ASIGNAR'].includes(estado)
-  const puedeFinalizar = role === 'ADMIN' || role === 'TECNICO'
-  const puedeAsignar = role === 'ADMIN' || role === 'INTERMEDIARIO'
+  const puedeFinalizar = esAdmin || rolActual === 'TECNICO' || esJefeArea
+  const puedeAsignar = esAdmin || esIntermediario || esJefeArea
   const areaResponsable = areaActual?.nombre || 'Por asignar'
 
   const nombreSolicitante =
@@ -105,17 +112,17 @@ function Seguimiento({ oficio, user, role }) {
 
   useEffect(() => {
     axiosClient.get(`/api/comentarios/ticket/${idReal}`)
-      .then(res => {
+      .then((res) => {
         setMensajes(res.data)
         bajarAlFinal()
       })
-      .catch(err => console.error('Error al cargar comentarios:', err))
+      .catch((err) => console.error('Error al cargar comentarios:', err))
   }, [idReal])
 
   useEffect(() => {
     axiosClient.get(`/api/tickets/${idReal}/evidencias`)
-      .then(res => setEvidencias(res.data))
-      .catch(err => console.error('Error al cargar evidencias:', err))
+      .then((res) => setEvidencias(res.data))
+      .catch((err) => console.error('Error al cargar evidencias:', err))
   }, [idReal])
 
   useEffect(() => {
@@ -127,21 +134,25 @@ function Seguimiento({ oficio, user, role }) {
 
     axiosClient.get('/api/usuarios/todos')
       .then((res) => {
-        const soloTecnicos = res.data.filter(
-          (u) => String(u.rol).toUpperCase() === 'TECNICO' && u.activo !== false
-        )
-        setTodosTecnicos(soloTecnicos)
+        const filtrados = res.data.filter((u) => {
+          if (u.activo === false) return false
+          const r = String(u.rol || '').toUpperCase()
+          if (esIntermediario) return r === 'JEFE_AREA'
+          if (esJefeArea) return r === 'TECNICO'
+          return r === 'JEFE_AREA' || r === 'TECNICO'
+        })
+        setCandidatos(filtrados)
       })
-      .catch((err) => console.error('Error al cargar técnicos:', err))
-  }, [puedeAsignar])
+      .catch((err) => console.error('Error al cargar responsables:', err))
+  }, [puedeAsignar, esIntermediario, esJefeArea])
 
-  const tecnicosFiltrados = useMemo(() => {
+  const candidatosFiltrados = useMemo(() => {
     if (!areaSeleccionada) return []
-    return todosTecnicos.filter((u) => {
-      const areaTecId = u.area?.idArea || u.area?.id
-      return String(areaTecId) === String(areaSeleccionada)
+    return candidatos.filter((u) => {
+      const areaUserId = u.area?.idArea || u.area?.id
+      return String(areaUserId) === String(areaSeleccionada)
     })
-  }, [todosTecnicos, areaSeleccionada])
+  }, [candidatos, areaSeleccionada])
 
   useEffect(() => {
     if (!aviso) return
@@ -161,11 +172,11 @@ function Seguimiento({ oficio, user, role }) {
     registrar(oficio.solicitante)
     registrar(oficio.tecnico)
     registrar(oficio.tecnicoAsignado)
-    registrar(tecnicoActual)
+    registrar(responsableActual)
     mensajes.forEach((m) => registrar(m.autor))
 
     return mapa
-  }, [mensajes, oficio, user, tecnicoActual])
+  }, [mensajes, oficio, user, responsableActual])
 
   const grupos = mensajes.reduce((acc, m) => {
     const fechaRaw = m.fechaCreacion || m.fecha_creacion || m.fecha || m.createdAt
@@ -205,26 +216,26 @@ function Seguimiento({ oficio, user, role }) {
     }
   }
 
-  const asignarTecnico = async () => {
-    if (!tecnicoSeleccionado) return
+  const asignarResponsable = async () => {
+    if (!responsableSeleccionado) return
     setAsignando(true)
     try {
-      const res = await axiosClient.put(`/api/tickets/${idReal}/asignar/${tecnicoSeleccionado}`)
-      const nuevoTec =
+      const res = await axiosClient.put(`/api/tickets/${idReal}/asignar/${responsableSeleccionado}`)
+      const nuevoResp =
         res.data?.tecnico ||
         res.data?.tecnicoAsignado ||
-        todosTecnicos.find((t) => String(t.idUsuario) === String(tecnicoSeleccionado))
+        candidatos.find((t) => String(t.idUsuario) === String(responsableSeleccionado))
       const nuevaArea =
         res.data?.area ||
-        nuevoTec?.area ||
+        nuevoResp?.area ||
         areas.find((a) => String(a.idArea || a.id) === String(areaSeleccionada))
 
-      setTecnicoActual(nuevoTec)
+      setResponsableActual(nuevoResp)
       if (nuevaArea) setAreaActual(nuevaArea)
-      setAviso(`Ticket asignado a ${nuevoTec?.nombreCompleto || 'técnico'}.`)
+      setAviso(`Ticket asignado a ${nuevoResp?.nombreCompleto || 'responsable'}.`)
     } catch (error) {
-      console.error('Error al asignar técnico:', error)
-      setAviso('No se pudo asignar el técnico. Revisa los permisos o la consola.')
+      console.error('Error al asignar responsable:', error)
+      setAviso(error.response?.data?.message || 'No se pudo asignar el ticket. Revisa los permisos o la consola.')
     } finally {
       setAsignando(false)
     }
@@ -261,7 +272,7 @@ function Seguimiento({ oficio, user, role }) {
         fechaCreacion: res.data?.fechaCreacion || new Date().toISOString(),
         autor: res.data?.autor?.nombreCompleto ? res.data.autor : user,
       }
-      setMensajes(prev => [...prev, nuevoMensaje])
+      setMensajes((prev) => [...prev, nuevoMensaje])
       setTexto('')
       setArchivoAdjunto(null)
       if (inputArchivoRef.current) inputArchivoRef.current.value = ''
@@ -275,7 +286,7 @@ function Seguimiento({ oficio, user, role }) {
   }
 
   const iniciarSeguimiento = async () => {
-    const comentarioInicio = 'El técnico ha iniciado el seguimiento y atención de este oficio.'
+    const comentarioInicio = 'Se ha iniciado el seguimiento y atención de este oficio.'
     setIniciando(true)
     try {
       await axiosClient.put(`/api/tickets/${idReal}/estado`, null, {
@@ -321,7 +332,7 @@ function Seguimiento({ oficio, user, role }) {
       })
       const payload = {
         texto: comentarioCierre,
-        autor: { idUsuario: user.idUsuario || user.id }
+        autor: { idUsuario: user.idUsuario || user.id },
       }
       const res = await axiosClient.post(`/api/comentarios/ticket/${idReal}`, payload)
       const nuevoMensaje = {
@@ -329,7 +340,7 @@ function Seguimiento({ oficio, user, role }) {
         fechaCreacion: res.data?.fechaCreacion || new Date().toISOString(),
         autor: res.data?.autor?.nombreCompleto ? res.data.autor : user,
       }
-      setMensajes(prev => [...prev, nuevoMensaje])
+      setMensajes((prev) => [...prev, nuevoMensaje])
       setEstado('RESUELTO')
       if (typeof finalizarOficio === 'function') finalizarOficio(idReal)
       bajarAlFinal()
@@ -342,6 +353,12 @@ function Seguimiento({ oficio, user, role }) {
   }
 
   const fechaCreacionTicket = normalizarFecha(oficio.fechaCreacion)
+  const tituloAsignacion = esIntermediario
+    ? 'Turnar a Jefe de Área'
+    : esJefeArea
+      ? 'Asignar Técnico de mi Área'
+      : 'Asignar Área y Responsable'
+  const etiquetaResponsable = esIntermediario ? 'Jefe de Área' : esJefeArea ? 'Técnico' : 'Responsable'
 
   return (
     <>
@@ -518,8 +535,8 @@ function Seguimiento({ oficio, user, role }) {
               <Detalle icon={Building} etiqueta="Área Asignada" valor={areaResponsable} />
               <Detalle
                 icon={UserCheck}
-                etiqueta="Técnico Asignado"
-                valor={tecnicoActual?.nombreCompleto || 'Sin asignar'}
+                etiqueta="Responsable Actual"
+                valor={responsableActual?.nombreCompleto || 'Sin asignar'}
               />
               <div className="border-t border-line pt-6">
                 <Detalle
@@ -535,57 +552,65 @@ function Seguimiento({ oficio, user, role }) {
             <div className="card p-6">
               <div className="flex items-center gap-2.5">
                 <UserCheck size={18} strokeWidth={1.75} className="text-primary" />
-                <h3 className="text-sm font-semibold text-slate-900">Asignar Área y Técnico</h3>
+                <h3 className="text-sm font-semibold text-slate-900">{tituloAsignacion}</h3>
               </div>
               <p className="mt-1 text-xs text-slate-500">
-                Elija el área destinataria y al técnico responsable de atender este oficio.
+                {esIntermediario
+                  ? 'Seleccione el área destinataria y el Jefe de Área que recibirá este oficio.'
+                  : esJefeArea
+                    ? 'Asigne este oficio a un técnico disponible de su área.'
+                    : 'Elija el área destinataria y el responsable de atender este oficio.'}
               </p>
 
-              <label className="mt-4 block text-xs font-medium text-slate-600">Área</label>
-              <select
-                value={areaSeleccionada}
-                onChange={(e) => {
-                  setAreaSeleccionada(e.target.value)
-                  setTecnicoSeleccionado('')
-                }}
-                className="mt-1.5 h-11 w-full rounded-lg border border-line bg-white px-3 text-sm text-slate-800 focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
-              >
-                <option value="">Seleccione un área...</option>
-                {areas.map((a) => (
-                  <option key={a.idArea || a.id} value={a.idArea || a.id}>
-                    {a.nombre}
-                  </option>
-                ))}
-              </select>
+              {!esJefeArea && (
+                <>
+                  <label className="mt-4 block text-xs font-medium text-slate-600">Área</label>
+                  <select
+                    value={areaSeleccionada}
+                    onChange={(e) => {
+                      setAreaSeleccionada(e.target.value)
+                      setResponsableSeleccionado('')
+                    }}
+                    className="mt-1.5 h-11 w-full rounded-lg border border-line bg-white px-3 text-sm text-slate-800 focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
+                  >
+                    <option value="">Seleccione un área...</option>
+                    {areas.map((a) => (
+                      <option key={a.idArea || a.id} value={a.idArea || a.id}>
+                        {a.nombre}
+                      </option>
+                    ))}
+                  </select>
+                </>
+              )}
 
-              <label className="mt-3 block text-xs font-medium text-slate-600">Técnico</label>
+              <label className="mt-3 block text-xs font-medium text-slate-600">{etiquetaResponsable}</label>
               <select
-                value={tecnicoSeleccionado}
-                onChange={(e) => setTecnicoSeleccionado(e.target.value)}
+                value={responsableSeleccionado}
+                onChange={(e) => setResponsableSeleccionado(e.target.value)}
                 disabled={!areaSeleccionada}
                 className="mt-1.5 h-11 w-full rounded-lg border border-line bg-white px-3 text-sm text-slate-800 focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20 disabled:bg-slate-50 disabled:text-slate-400"
               >
                 <option value="">
                   {!areaSeleccionada
                     ? 'Primero seleccione un área...'
-                    : tecnicosFiltrados.length === 0
-                      ? 'No hay técnicos en esta área'
-                      : 'Seleccione un técnico...'}
+                    : candidatosFiltrados.length === 0
+                      ? `No hay ${esIntermediario ? 'jefes de área' : 'técnicos'} en esta área`
+                      : `Seleccione un ${etiquetaResponsable.toLowerCase()}...`}
                 </option>
-                {tecnicosFiltrados.map((t) => (
+                {candidatosFiltrados.map((t) => (
                   <option key={t.idUsuario} value={t.idUsuario}>
-                    {t.nombreCompleto}
+                    {t.nombreCompleto} {esAdmin ? `(${String(t.rol).toUpperCase()})` : ''}
                   </option>
                 ))}
               </select>
 
               <button
                 type="button"
-                onClick={asignarTecnico}
-                disabled={asignando || !tecnicoSeleccionado}
+                onClick={asignarResponsable}
+                disabled={asignando || !responsableSeleccionado}
                 className="btn-primary mt-4 w-full py-2.5 text-sm disabled:opacity-50"
               >
-                {asignando ? 'Asignando...' : tecnicoActual ? 'Reasignar Técnico' : 'Asignar Técnico'}
+                {asignando ? 'Asignando...' : responsableActual ? `Reasignar ${etiquetaResponsable}` : `Asignar ${etiquetaResponsable}`}
               </button>
             </div>
           )}

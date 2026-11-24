@@ -7,15 +7,17 @@ const TOKEN_KEY = 'jwt_token'
 
 const ROLES = {
   ADMIN: 'ADMIN',
+  JEFE_AREA: 'JEFE_AREA',
   TECNICO: 'TECNICO',
   INTERMEDIARIO: 'INTERMEDIARIO',
-  SOLICITANTE: 'SOLICITANTE'
+  SOLICITANTE: 'SOLICITANTE',
 }
 
 const PERMISSIONS = {
-  [ROLES.ADMIN]: ['ver_estadisticas', 'gestionar_usuarios', 'crear_oficio', 'ver_todas_dependencias', 'asignar_tickets'],
+  [ROLES.ADMIN]: ['ver_estadisticas', 'gestionar_usuarios', 'crear_oficio', 'ver_todas_dependencias', 'asignar_tickets', 'atender_tickets'],
+  [ROLES.JEFE_AREA]: ['ver_estadisticas', 'gestionar_usuarios', 'crear_oficio', 'asignar_tickets', 'atender_tickets'],
   [ROLES.TECNICO]: ['atender_tickets', 'crear_oficio'],
-  [ROLES.INTERMEDIARIO]: ['ver_estadisticas', 'crear_oficio', 'ver_todas_dependencias'],
+  [ROLES.INTERMEDIARIO]: ['ver_estadisticas', 'crear_oficio', 'ver_todas_dependencias', 'asignar_tickets'],
   [ROLES.SOLICITANTE]: ['crear_oficio'],
 }
 
@@ -31,7 +33,6 @@ function loadSession() {
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(loadSession)
 
-  // Persistencia de Sesión
   useEffect(() => {
     if (user) {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(user))
@@ -74,12 +75,11 @@ export function AuthProvider({ children }) {
     setUser(null)
   }, [])
 
-  // Actualiza los datos del usuario en sesión y los guarda automáticamente en localStorage
   const updateUser = useCallback((datosNuevos) => {
     setUser((prev) => (prev ? { ...prev, ...datosNuevos } : prev))
   }, [])
 
-  const role = user?.rol ?? null
+  const role = user?.rol ? String(user.rol).toUpperCase() : null
   const can = useCallback((permission) => {
     return !!role && PERMISSIONS[role]?.includes(permission)
   }, [role])
@@ -88,9 +88,24 @@ export function AuthProvider({ children }) {
     if (!user) return []
     const rolActual = String(user.rol || role || '').toUpperCase()
     const miId = user.idUsuario || user.id
+    const miAreaId = user.area?.idArea || user.area?.id
 
-    if (rolActual === 'ADMIN' || rolActual === 'INTERMEDIARIO') {
+    if (rolActual === 'ADMIN' || rolActual === 'ADMINISTRADOR' || rolActual === 'INTERMEDIARIO') {
       return lista
+    }
+
+    // El Jefe de Área ve todos los tickets de su área (más los que creó o tiene asignados)
+    if (rolActual === 'JEFE_AREA') {
+      return lista.filter((o) => {
+        const areaTicketId = o.area?.idArea || o.area?.id
+        const idTec = o.tecnico?.idUsuario || o.tecnicoAsignado?.idUsuario
+        const idSol = o.solicitante?.idUsuario || o.solicitanteId
+        return (
+          (miAreaId && areaTicketId && String(areaTicketId) === String(miAreaId)) ||
+          (idTec && String(idTec) === String(miId)) ||
+          (idSol && String(idSol) === String(miId))
+        )
+      })
     }
 
     if (rolActual === 'TECNICO') {
@@ -110,10 +125,22 @@ export function AuthProvider({ children }) {
     return []
   }, [user, role])
 
-  const filterUsuarios = useCallback((lista) => {
+  const filterUsuarios = useCallback((lista = []) => {
     if (!user) return []
+    const rolActual = String(user.rol || role || '').toUpperCase()
+
+    // El Jefe de Área solo ve a los usuarios de su misma área
+    if (rolActual === 'JEFE_AREA') {
+      const miAreaId = user.area?.idArea || user.area?.id
+      if (!miAreaId) return []
+      return lista.filter((u) => {
+        const uAreaId = u.area?.idArea || u.area?.id
+        return uAreaId && String(uAreaId) === String(miAreaId)
+      })
+    }
+
     return lista
-  }, [user])
+  }, [user, role])
 
   const value = useMemo(
     () => ({

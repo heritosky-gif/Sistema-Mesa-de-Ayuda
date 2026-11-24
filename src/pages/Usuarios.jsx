@@ -18,6 +18,7 @@ const POR_PAGINA = 10
 const ESTILO_PERMISO = {
   ADMIN: 'bg-primary-soft text-primary',
   ADMINISTRADOR: 'bg-primary-soft text-primary',
+  JEFE_AREA: 'bg-indigo-50 text-indigo-700',
   INTERMEDIARIO: 'bg-amber-50 text-amber-700',
   TECNICO: 'bg-emerald-50 text-emerald-700',
   SOLICITANTE: 'bg-slate-100 text-slate-600',
@@ -211,6 +212,7 @@ export default function Usuarios() {
           <FiltroSelect etiqueta="Rol" value={rolFiltro} onChange={conReinicio(setRolFiltro)}>
             <option value="">Todos</option>
             <option value="ADMIN">Administrador</option>
+            <option value="JEFE_AREA">Jefe de Área</option>
             <option value="INTERMEDIARIO">Intermediario</option>
             <option value="TECNICO">Técnico</option>
             <option value="SOLICITANTE">Solicitante</option>
