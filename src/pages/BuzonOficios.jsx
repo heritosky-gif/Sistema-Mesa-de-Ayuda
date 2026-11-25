@@ -35,8 +35,16 @@ const esResuelta = (o) => ['RESUELTO', 'RESUELTA', 'FINALIZADO', 'CERRADO'].incl
 
 const TABS = [
   { id: 'todas', label: 'Todas las solicitudes', match: () => true },
-  { id: 'seguimiento', label: 'En seguimiento', match: (o) => ['EN_PROCESO', 'ASIGNADO', 'EN_ATENCION'].includes(getEstado(o)) },
-  { id: 'pendientes', label: 'Pendientes', match: (o) => ['PENDIENTE', 'ABIERTO', 'NUEVO', 'SIN_ASIGNAR'].includes(getEstado(o)) },
+  {
+    id: 'seguimiento',
+    label: 'En seguimiento',
+    match: (o) => ['EN_PROCESO', 'EN_PROGRESO', 'ASIGNADO', 'EN_ATENCION'].includes(getEstado(o)),
+  },
+  {
+    id: 'pendientes',
+    label: 'Pendientes',
+    match: (o) => ['PENDIENTE', 'ABIERTO', 'NUEVO', 'SIN_ASIGNAR'].includes(getEstado(o)),
+  },
   { id: 'resueltas', label: 'Resueltas', match: esResuelta },
 ]
 
@@ -99,7 +107,7 @@ export default function BuzonOficios() {
     return visibles.filter((o) => {
       const areaId = o.area?.idArea || o.area || o.dependenciaId
       if (areaValida && areaId != areaValida) return false
-      if (urgencia && o.prioridad !== urgencia) return false
+      if (urgencia && String(o.prioridad || '').toLowerCase() !== String(urgencia).toLowerCase()) return false
       if (!q) return true
 
       const areaObj = areas.find((a) => (a.idArea || a.id) == areaId)
@@ -149,8 +157,10 @@ export default function BuzonOficios() {
       [
         { header: 'Folio', value: (o) => o.folio || `#${o.idTicket || o.id}` },
         { header: 'Categoría', value: (o) => nombreCategoria(o) },
-        { header: 'Asunto', value: (o) => o.titulo || o.asunto },
+        { header: 'Asunto', value: (o) => o.titulo || o.asunto || '' },
+        { header: 'Solicitante', value: (o) => o.solicitante?.nombreCompleto || o.solicitante?.nombre || 'Usuario' },
         { header: 'Área', value: (o) => o.area?.nombre || 'Por asignar' },
+        { header: 'Responsable', value: (o) => o.tecnico?.nombreCompleto || o.tecnicoAsignado?.nombreCompleto || 'Sin asignar' },
         {
           header: 'Recibida',
           value: (o) => {
@@ -158,8 +168,8 @@ export default function BuzonOficios() {
             return f ? `${formatFechaCorta(f)} ${formatHora12(f)}` : 'Sin fecha'
           },
         },
-        { header: 'Prioridad', value: (o) => PRIORIDAD_LABELS[o.prioridad] || o.prioridad },
-        { header: 'Estado', value: (o) => ESTADO_LABELS[o.estatus || o.estado] || o.estatus || o.estado },
+        { header: 'Prioridad', value: (o) => PRIORIDAD_LABELS[String(o.prioridad || '').toLowerCase()] || o.prioridad || '' },
+        { header: 'Estado', value: (o) => ESTADO_LABELS[String(o.estatus || o.estado || '').toLowerCase()] || getEstado(o) },
       ],
       lista
     )
