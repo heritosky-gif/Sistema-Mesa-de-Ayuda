@@ -34,32 +34,32 @@ export function OficiosProvider({ children }) {
 
   const crearOficio = useCallback(async (payloadTicket, adjuntos = []) => {
     try {
-      
-      const response = await axiosClient.post('/api/tickets/crear', payloadTicket);
-      const nuevoTicket = response.data; 
+      const response = await axiosClient.post('/api/tickets/crear', payloadTicket)
+      const nuevoTicket = response.data
 
       if (adjuntos.length > 0) {
-        // Ejecutamos todas las subidas en paralelo
-        await Promise.all(adjuntos.map(async (adjunto) => {
-          const formData = new FormData();
-          formData.append('archivo', adjunto.archivoFisico); 
-          
-          await axiosClient.post(`/api/tickets/${nuevoTicket.idTicket}/evidencias`, formData, {
-            headers: {
-              'Content-Type': 'multipart/form-data'
-            }
-          });
-        }));
+        await Promise.all(
+          adjuntos.map(async (adjunto) => {
+            const archivo = adjunto.archivoFisico || adjunto.file || adjunto
+            const formData = new FormData()
+            formData.append('archivo', archivo)
+
+            await axiosClient.post(`/api/tickets/${nuevoTicket.idTicket}/evidencias`, formData, {
+              headers: {
+                'Content-Type': undefined,
+              },
+            })
+          })
+        )
       }
 
-      setOficios((prev) => [...prev, nuevoTicket]);
-
-      return nuevoTicket;
+      setOficios((prev) => [...prev, nuevoTicket])
+      return nuevoTicket
     } catch (error) {
-      console.error("Fallo al insertar en PostgreSQL:", error);
-      throw error; 
+      console.error('Fallo al insertar en PostgreSQL:', error)
+      throw error
     }
-  }, []);
+  }, [])
 
   const getBorrador = useCallback((userId) => {
     const b = localStorage.getItem(`borrador_${userId}`);

@@ -29,6 +29,8 @@ const ESTADO_TONOS = {
   RESUELTO: 'bg-emerald-50 text-emerald-700',
 }
 
+const MAX_BYTES = 5 * 1024 * 1024
+
 const normalizarFecha = (fecha) => {
   if (!fecha) return null
   if (typeof fecha === 'string') return fecha
@@ -137,14 +139,13 @@ function Seguimiento({ oficio, user, role }) {
         const filtrados = res.data.filter((u) => {
           if (u.activo === false) return false
           const r = String(u.rol || '').toUpperCase()
-          if (esIntermediario) return r === 'JEFE_AREA'
           if (esJefeArea) return r === 'TECNICO'
-          return r === 'JEFE_AREA' || r === 'TECNICO'
+          return r === 'JEFE_AREA'
         })
         setCandidatos(filtrados)
       })
       .catch((err) => console.error('Error al cargar responsables:', err))
-  }, [puedeAsignar, esIntermediario, esJefeArea])
+  }, [puedeAsignar, esJefeArea])
 
   const candidatosFiltrados = useMemo(() => {
     if (!areaSeleccionada) return []
@@ -239,6 +240,19 @@ function Seguimiento({ oficio, user, role }) {
     } finally {
       setAsignando(false)
     }
+  }
+
+  const seleccionarArchivo = (e) => {
+    const archivo = e.target.files?.[0]
+    if (!archivo) return
+
+    if (archivo.size > MAX_BYTES) {
+      setAviso('El archivo es demasiado pesado. El límite es de 5 MB.')
+      e.target.value = ''
+      return
+    }
+
+    setArchivoAdjunto(archivo)
   }
 
   const enviar = async () => {
@@ -353,12 +367,8 @@ function Seguimiento({ oficio, user, role }) {
   }
 
   const fechaCreacionTicket = normalizarFecha(oficio.fechaCreacion)
-  const tituloAsignacion = esIntermediario
-    ? 'Turnar a Jefe de Área'
-    : esJefeArea
-      ? 'Asignar Técnico de mi Área'
-      : 'Asignar Área y Responsable'
-  const etiquetaResponsable = esIntermediario ? 'Jefe de Área' : esJefeArea ? 'Técnico' : 'Responsable'
+  const tituloAsignacion = esJefeArea ? 'Asignar Técnico de mi Área' : 'Turnar a Jefe de Área'
+  const etiquetaResponsable = esJefeArea ? 'Técnico' : 'Jefe de Área'
 
   return (
     <>
@@ -498,7 +508,7 @@ function Seguimiento({ oficio, user, role }) {
                         type="file"
                         hidden
                         accept=".pdf,.png,.jpg,.jpeg,.docx"
-                        onChange={(e) => setArchivoAdjunto(e.target.files?.[0] || null)}
+                        onChange={seleccionarArchivo}
                       />
                       <button
                         type="button"
@@ -555,11 +565,9 @@ function Seguimiento({ oficio, user, role }) {
                 <h3 className="text-sm font-semibold text-slate-900">{tituloAsignacion}</h3>
               </div>
               <p className="mt-1 text-xs text-slate-500">
-                {esIntermediario
-                  ? 'Seleccione el área destinataria y el Jefe de Área que recibirá este oficio.'
-                  : esJefeArea
-                    ? 'Asigne este oficio a un técnico disponible de su área.'
-                    : 'Elija el área destinataria y el responsable de atender este oficio.'}
+                {esJefeArea
+                  ? 'Asigne este oficio a un técnico disponible de su área.'
+                  : 'Seleccione el área destinataria y el Jefe de Área que recibirá este oficio.'}
               </p>
 
               {!esJefeArea && (
@@ -594,12 +602,12 @@ function Seguimiento({ oficio, user, role }) {
                   {!areaSeleccionada
                     ? 'Primero seleccione un área...'
                     : candidatosFiltrados.length === 0
-                      ? `No hay ${esIntermediario ? 'jefes de área' : 'técnicos'} en esta área`
+                      ? `No hay ${esJefeArea ? 'técnicos' : 'jefes de área'} en esta área`
                       : `Seleccione un ${etiquetaResponsable.toLowerCase()}...`}
                 </option>
                 {candidatosFiltrados.map((t) => (
                   <option key={t.idUsuario} value={t.idUsuario}>
-                    {t.nombreCompleto} {esAdmin ? `(${String(t.rol).toUpperCase()})` : ''}
+                    {t.nombreCompleto}
                   </option>
                 ))}
               </select>
