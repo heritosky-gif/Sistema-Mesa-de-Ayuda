@@ -72,7 +72,7 @@ const normalizar = (s) =>
     .toLowerCase()
 
 export default function BuzonOficios() {
-  const { filterOficios, can } = useAuth()
+  const { filterOficios, can , user , role } = useAuth()
   const location = useLocation()
   const navigate = useNavigate()
 
@@ -95,10 +95,16 @@ export default function BuzonOficios() {
   const { areas } = useInstitucion()
   const visibles = useMemo(() => filterOficios(oficios), [filterOficios, oficios])
 
+  const rolActual = String(role || user?.rol || '').toUpperCase()
+  const esAdminOIntermediario = ['ADMIN', 'ADMINISTRADOR', 'INTERMEDIARIO'].includes(rolActual)
+  const miAreaId = user?.area?.idArea || user?.area?.id
+
   const areasDisponibles = useMemo(() => {
-    const ids = new Set(visibles.map((o) => o.area?.idArea || o.area || o.dependenciaId))
-    return areas.filter((a) => ids.has(a.idArea || a.id))
-  }, [visibles, areas])
+    const activas = areas.filter((a) => a.activo !== false)
+    if (esAdminOIntermediario) return activas
+    if (!miAreaId) return []
+    return activas.filter((a) => String(a.idArea || a.id) === String(miAreaId))
+  }, [areas, esAdminOIntermediario, miAreaId])
 
   const areaValida = areasDisponibles.some((a) => (a.idArea || a.id) == areaSeleccionada) ? areaSeleccionada : ''
 

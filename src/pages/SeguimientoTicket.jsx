@@ -29,7 +29,7 @@ const ESTADO_TONOS = {
   RESUELTO: 'bg-emerald-50 text-emerald-700',
 }
 
-const MAX_BYTES = 5 * 1024 * 1024
+const MAX_BYTES = 15 * 1024 * 1024
 
 const normalizarFecha = (fecha) => {
   if (!fecha) return null
@@ -247,7 +247,7 @@ function Seguimiento({ oficio, user, role }) {
     if (!archivo) return
 
     if (archivo.size > MAX_BYTES) {
-      setAviso('El archivo es demasiado pesado. El límite es de 5 MB.')
+      setAviso('El archivo es demasiado pesado. El límite es de 15 MB.')
       e.target.value = ''
       return
     }

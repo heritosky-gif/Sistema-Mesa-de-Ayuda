@@ -24,7 +24,7 @@ import { PRIORIDADES } from '../data/mockData'
 const FORM_INICIAL = { destino: '', categoria: '', prioridad: PRIORIDADES.MEDIA, titulo: '', descripcion: '' }
 
 const EXTENSIONES = ['pdf', 'docx', 'png', 'jpg', 'jpeg']
-const MAX_BYTES = 5 * 1024 * 1024
+const MAX_BYTES = 15 * 1024 * 1024
 const MAX_TITULO = 150
 
 const OPCIONES_PRIORIDAD = [
@@ -112,7 +112,7 @@ function Formulario() {
     const buenos = []
     for (const f of lista) {
       if (!EXTENSIONES.includes(extension(f.name))) malos.push(`${f.name}: formato no permitido`)
-      else if (f.size > MAX_BYTES) malos.push(`${f.name}: supera los 5 MB`)
+      else if (f.size > MAX_BYTES) malos.push(`${f.name}: supera los 15 MB`)
       else
         buenos.push({
           id: `${Date.now()}-${f.name}-${Math.random().toString(36).slice(2, 7)}`,
@@ -293,7 +293,7 @@ function Formulario() {
             <p className="mt-4 text-sm text-slate-800">
               Arrastre y suelte sus archivos aquí o <button type="button" onClick={() => fileInput.current?.click()} className="font-semibold text-primary hover:underline">Examine en su equipo</button>
             </p>
-            <p className="mt-2 text-xs text-slate-500">Formatos permitidos: PDF, DOCX, PNG, JPG (Máximo 5 MB por archivo).</p>
+            <p className="mt-2 text-xs text-slate-500">Formatos permitidos: PDF, DOCX, PNG, JPG (Máximo 15 MB por archivo).</p>
             <input ref={fileInput} type="file" multiple hidden accept=".pdf,.docx,.png,.jpg,.jpeg" onChange={(e) => { agregarArchivos([...e.target.files]); e.target.value = '' }} />
           </div>
 
