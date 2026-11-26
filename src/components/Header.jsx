@@ -3,8 +3,16 @@ import { Link } from 'react-router-dom'
 import { Bell, CalendarDays, ChevronDown, CircleUser, LogOut, Menu } from 'lucide-react'
 import { useAuth } from '../context/AuthContext'
 import useNotificaciones from '../hooks/useNotificaciones'
-import { ROLE_LABELS } from '../data/mockData'
 import Avatar from './Avatar'
+
+const ROLE_LABELS = {
+  ADMIN: 'Administrador',
+  ADMINISTRADOR: 'Administrador',
+  INTERMEDIARIO: 'Intermediario',
+  JEFE_AREA: 'Jefe de Área',
+  TECNICO: 'Técnico',
+  SOLICITANTE: 'Solicitante',
+}
 
 export default function Header({ onMenuClick }) {
   const { user, dependencia, role, logout } = useAuth()

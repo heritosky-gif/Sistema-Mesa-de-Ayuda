@@ -58,31 +58,30 @@ export default function useNotificaciones() {
 
   const visibles = useMemo(() => (user ? filterOficios(oficios) : []), [user, filterOficios, oficios])
 
-  // Cargar comentarios reales de los últimos 12 tickets visibles
+  // Cargar el último comentario de los últimos 12 tickets en 1 sola petición
   useEffect(() => {
     if (!userId || visibles.length === 0) return
 
     let activo = true
-    const recientes = [...visibles]
+    const ids = [...visibles]
       .sort((a, b) => (normalizarFecha(b.fechaCreacion) || '').localeCompare(normalizarFecha(a.fechaCreacion) || ''))
       .slice(0, 12)
+      .map((o) => o.idTicket || o.id)
+      .filter(Boolean)
 
-    Promise.all(
-      recientes.map((o) => {
-        const idTicket = o.idTicket || o.id
-        return axiosClient
-          .get(`/api/comentarios/ticket/${idTicket}`)
-          .then((res) => ({ idTicket, ultimo: Array.isArray(res.data) ? res.data.at(-1) : null }))
-          .catch(() => ({ idTicket, ultimo: null }))
+    if (ids.length === 0) return
+
+    axiosClient
+      .get('/api/notificaciones/ultimos-comentarios', {
+        params: { ids: ids.join(',') },
       })
-    ).then((resultados) => {
-      if (!activo) return
-      const mapa = {}
-      resultados.forEach(({ idTicket, ultimo }) => {
-        if (ultimo) mapa[String(idTicket)] = ultimo
+      .then((res) => {
+        if (!activo) return
+        setUltimosMensajes(res.data || {})
       })
-      setUltimosMensajes(mapa)
-    })
+      .catch(() => {
+        if (activo) setUltimosMensajes({})
+      })
 
     return () => {
       activo = false
@@ -93,7 +92,7 @@ export default function useNotificaciones() {
     if (!userId) return []
     const ahora = Date.now()
 
-    //Mensajes de seguimiento escritos por otra persona
+    // Mensajes de seguimiento escritos por otra persona
     const mensajes = visibles
       .map((o) => {
         const idTicket = o.idTicket || o.id
@@ -112,7 +111,7 @@ export default function useNotificaciones() {
         mensaje: m,
       }))
 
-    //Solicitudes nuevas (últimos 7 días) o resueltas
+    // Solicitudes nuevas (últimos 7 días) o resueltas
     const solicitudes = visibles.flatMap((o) => {
       const items = []
       const idTicket = o.idTicket || o.id
@@ -143,7 +142,7 @@ export default function useNotificaciones() {
       return items
     })
 
-    //Alertas SLA: tickets abiertos con prioridad ALTA/CRITICA o con más de 24h abiertos
+    // Alertas SLA: tickets abiertos con prioridad ALTA/CRITICA o con más de 24h abiertos
     const sla = visibles
       .filter((o) => !esResuelto(o))
       .map((o) => {
