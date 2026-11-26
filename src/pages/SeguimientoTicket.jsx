@@ -527,6 +527,7 @@ function Seguimiento({ oficio, user, role }) {
                       {subiendo ? 'Enviando...' : <>Enviar Mensaje <Send size={16} /></>}
                     </button>
                   </div>
+                  <p className="mt-2.5 text-[11px] text-slate-400">Formatos permitidos: PDF, DOCX, PNG, JPG (máx. 15 MB). Los archivos adjuntos quedan registrados bajo tu usuario.</p>
                 </>
               )}
             </div>

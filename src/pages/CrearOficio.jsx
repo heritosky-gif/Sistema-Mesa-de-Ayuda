@@ -294,6 +294,7 @@ function Formulario() {
               Arrastre y suelte sus archivos aquí o <button type="button" onClick={() => fileInput.current?.click()} className="font-semibold text-primary hover:underline">Examine en su equipo</button>
             </p>
             <p className="mt-2 text-xs text-slate-500">Formatos permitidos: PDF, DOCX, PNG, JPG (Máximo 15 MB por archivo).</p>
+            <p className="mt-1 text-[11px] text-slate-400">Por seguridad institucional, todos los archivos adjuntos quedan registrados bajo tu usuario.</p>
             <input ref={fileInput} type="file" multiple hidden accept=".pdf,.docx,.png,.jpg,.jpeg" onChange={(e) => { agregarArchivos([...e.target.files]); e.target.value = '' }} />
           </div>
 
